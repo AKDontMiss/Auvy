@@ -294,7 +294,11 @@ Grab the APK from [Releases](../../releases) and open it. Android will ask you t
 allow installs from this source the first time.
 
 - Needs Android 8.0 or newer. Phones only, there's no tablet layout.
-- Play Protect may warn you. That means "not from the Play Store", not "unsafe".
+- Play Protect will show **"App scan recommended — Play Protect hasn't seen this
+  app before."** That is a notice about novelty, not a malware detection: it
+  appears for any APK signed with a key Google has not yet seen at scale. Tap
+  **Scan app** rather than skipping it. It comes back clean, and each scan is
+  what eventually stops the prompt appearing for the next person.
 - Updates come from the Releases tab. The app can tell you when there's a new one.
 
 ---
