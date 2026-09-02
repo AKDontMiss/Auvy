@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    A deliberately EMPTY drawable, used as the Android 12+ splash icon.
+
+    From API 31 the system splash screen is mandatory: Android draws the
+    launcher icon over `windowSplashScreenBackground` on every cold start, and
+    there is no attribute that turns it off. That icon appeared for a beat before
+    Auvy's own splash could run, so the launch read as two splash screens — the
+    system's icon-on-a-plate, then the morph sequence — with a visible jump
+    between them.
+
+    Supplying a transparent icon is the supported way to make that beat
+    invisible: the system splash still happens, but it is a black screen that is
+    pixel-identical to the first frame of the Flutter splash, so the two are
+    indistinguishable and the sequence appears to start immediately.
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="@android:color/transparent" />
+</shape>

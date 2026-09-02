@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  CLEARTEXT IS PERMITTED, AND EVERY HOST THAT MATTERS IS PINNED AGAINST IT.
+
+  WHY IT HAD TO CHANGE. Internet radio is overwhelmingly plain http://. Measured
+  against the directory's own top-80 most-voted stations: 53 of 80 are http, 27
+  https. With cleartext denied app-wide, ExoPlayer failed those 53 with
+  ERROR_CODE_IO_CLEARTEXT_NOT_PERMITTED, which surfaced as a station that buffers
+  and then dies — "radio isn't working". Two thirds of the feature was unreachable
+  and nothing said why.
+
+  WHY THIS IS AN ACCEPTABLE TRADE. A radio stream is public, unauthenticated audio:
+  no credential, token or personal datum is ever sent to a station host, so there
+  is nothing there to steal. What cleartext costs is integrity (someone positioned
+  on the path could substitute audio) and it reveals which station is being played
+  — which SNI and DNS already reveal even over https.
+
+  WHY THE DENY LIST IS THE IMPORTANT HALF. Flipping the base policy without it
+  would also make every host that DOES carry secrets downgradeable: a
+  man-in-the-middle could answer an http:// attempt for the auth Worker or the
+  YouTube API and read what was sent. Every host below is pinned to encrypted-only,
+  so a downgrade against them is refused by the platform regardless of what any
+  code asks for. Anything that authenticates, carries an API key, or moves a user's
+  library belongs on this list — add to it before adding a new backend.
+-->
+<network-security-config>
+
+
+    <!--
+      Everything else may use cleartext. In practice that means radio station
+      hosts (thousands of arbitrary domains, so they cannot be enumerated) and
+      podcast feeds, which have the same properties: public, unauthenticated
+      media.
+    -->
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+    <!-- Encrypted-only, no exceptions. These carry auth, API keys or user data. -->
+    <domain-config cleartextTrafficPermitted="false">
+        <!-- The Auvy Worker: session auth, admin, lyrics, covers, directories. -->
+        <domain includeSubdomains="true">auvy.workers.dev</domain>
+        <!-- YouTube / YouTube Music: cookies and the signed-in player requests. -->
+        <domain includeSubdomains="true">youtube.com</domain>
+        <domain includeSubdomains="true">youtubei.googleapis.com</domain>
+        <domain includeSubdomains="true">music.youtube.com</domain>
+        <domain includeSubdomains="true">googlevideo.com</domain>
+        <domain includeSubdomains="true">ytimg.com</domain>
+        <domain includeSubdomains="true">googleusercontent.com</domain>
+        <!-- Google sign-in and Firebase: tokens, and the whole cloud backup. -->
+        <domain includeSubdomains="true">google.com</domain>
+        <domain includeSubdomains="true">googleapis.com</domain>
+        <domain includeSubdomains="true">firebaseio.com</domain>
+        <domain includeSubdomains="true">firebaseapp.com</domain>
+        <domain includeSubdomains="true">firebaseinstallations.googleapis.com</domain>
+        <!-- Discord: the Gateway user token passes through here. -->
+        <domain includeSubdomains="true">discord.com</domain>
+        <domain includeSubdomains="true">discordapp.com</domain>
+        <!-- Update delivery: an APK fetched over cleartext could be substituted. -->
+        <domain includeSubdomains="true">github.com</domain>
+        <domain includeSubdomains="true">githubusercontent.com</domain>
+        <!--
+          FOUND BY AUDITING WHAT ACTUALLY CARRIES A CREDENTIAL, rather than by
+          assuming the obvious hosts were the only ones.
+
+          ListenBrainz receives the USER'S OWN SCROBBLE TOKEN in a header
+          (`Authorization: Token <token>`, scrobble_service.dart). It is a
+          credential to somebody's account, so it belongs in the encrypted-only
+          set exactly as much as the YouTube cookie does — it was simply less
+          obvious, which is the only reason it was missed first time.
+        -->
+        <domain includeSubdomains="true">api.listenbrainz.org</domain>
+        <!--
+          Spotify: an access token is fetched from the embed endpoint and then
+          sent to the API. Not the user's account credential, but a token all the
+          same, and there is no reason to let it travel in clear.
+        -->
+        <domain includeSubdomains="true">spotify.com</domain>
+        <!--
+          Last.fm carries the app's API key in the query string. A leaked key is
+          not a user's data, but it is a key that can be abused against our quota.
+        -->
+        <domain includeSubdomains="true">last.fm</domain>
+        <!--
+          Archive.org: no credential, pinned for INTEGRITY. It serves audiobook
+          audio and covers, and it supports https everywhere — so there is no cost
+          to requiring it, and it removes the one case where injected audio would
+          reach a listener as if it were the book.
+        -->
+        <domain includeSubdomains="true">archive.org</domain>
+    </domain-config>
+
+</network-security-config>

@@ -1,0 +1,19 @@
+﻿{
+  "//": "Replace this file with the google-services.json from YOUR OWN Firebase project (Firebase console -> Project settings -> Your apps -> Android). The real one is deliberately not published: it points at the upstream project. Auvy needs Firestore (cloud backup) and App Check; deploy firestore.rules with `firebase deploy --only firestore:rules`.",
+  "project_info": {
+    "project_number": "YOUR_PROJECT_NUMBER",
+    "project_id": "YOUR_PROJECT_ID",
+    "storage_bucket": "YOUR_PROJECT_ID.appspot.com"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "YOUR_APP_ID",
+        "android_client_info": { "package_name": "com.auvy.app" }
+      },
+      "api_key": [ { "current_key": "YOUR_ANDROID_API_KEY" } ],
+      "services": { "appinvite_service": { "other_platform_oauth_client": [] } }
+    }
+  ],
+  "configuration_version": "1"
+}

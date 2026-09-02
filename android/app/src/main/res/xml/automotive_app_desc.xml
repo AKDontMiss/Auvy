@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Declares Auvy as an Android Auto MEDIA app. Auto reads this to decide the
+     app may present a browsable media tree on the car display; the tree itself
+     is served by AuvyAudioHandler.getRoot/getChildren. -->
+<automotiveApp>
+    <uses name="media"/>
+</automotiveApp>

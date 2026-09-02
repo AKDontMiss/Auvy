@@ -1,0 +1,98 @@
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.env
+
+# Release signing — NEVER commit these
+android/key.properties
+*.jks
+*.keystore
+.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# The .vscode folder contains launch configuration and tasks you configure in
+# VS Code which you may wish to be included in version control, so this line
+# is commented out by default.
+#.vscode/
+
+# Flutter/Dart/Pub related
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+/build/
+
+# Gradle writes here too, and the root-only rule above never covered it. A
+# problems-report.html had been committed and was then copied into the PUBLIC
+# export, because that export walks `git ls-files`.
+android/build/
+**/.gradle/
+/coverage/
+
+# Symbolication related
+app.*.symbols
+
+# Obfuscation related
+app.*.map.json
+
+# Android Studio will place build artifacts here
+/android/app/debug
+/android/app/profile
+/android/app/release
+
+# Prevent real Google/Firebase configs from leaking (was a typo: "google-service"
+# singular never matched the real "google-services.json" → the file stayed tracked).
+google-services.json
+app/google-services.json
+android/app/google-services.json
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+!.env.example
+
+# Source images for the cover library. Converted into covers/ as 800x800 webp
+# by tool/ scripts; the originals are 356MB of jpg/png and must never be
+# committed — a single "git add ." would put them in history permanently.
+new_covers/
+
+# ── WORKING NOTES, NOT PART OF THE APP ──────────────────────────────────────
+#
+# Development journals and internal review notes: operational detail,
+# environment specifics, device logs and unfixed weaknesses. None of it is
+# source and none of it belongs in a PUBLISHED tree.
+#
+# THIS REPOSITORY IS PRIVATE AND STAYS PRIVATE. The public release is a
+# separate repo produced by tool/export_public_source.ps1, exported
+# history-free — so "not in the public tree" and "not tracked here" were never
+# actually the same requirement. session_progress.md is tracked from
+# 2026-09-01 because a development journal is worth having in history when the
+# history is private.
+#
+# WHAT KEEPS IT OUT OF THE PUBLIC REPO IS THE EXPORT SCRIPT, NOT THIS FILE.
+# The export copies every path `git ls-files` returns, so tracking it here is
+# exactly what would publish it. That script's $excludeExact has named it since
+# before it was tracked — it was written as belt-and-braces and is now the only
+# thing preventing it — and a post-export check refuses to publish if it
+# reaches the output tree by any route. Do not remove either.
+#
+# AUVY_AUDIT.md stays untracked: it is a point-in-time review of weaknesses
+# rather than a running record, and it has no value in history.
+AUVY_AUDIT.md

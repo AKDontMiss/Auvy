@@ -1,0 +1,414 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    package="com.auvy.app">
+    
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
+    <!-- Lets Auvy ask to be exempted from battery optimization. On Samsung/One UI
+         "put app to sleep" overrides even a mediaPlayback foreground service and
+         cuts the network with the screen off — this is THE fix for that. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <!-- Song recognition: capture microphone audio to fingerprint what's playing.
+         Also required for AudioPlaybackCapture (this-device audio) — that reads
+         through AudioRecord too, so the same permission gates it. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Audio capture for song recognition (in-app long-press AND the
+         quick-settings tile). MediaProjection is only granted to a running
+         foreground service of this exact type on API 34+.
+         THE NOTE THAT USED TO BE HERE WAS WRONG, AND IT COST A FEATURE.
+         It said a `microphone`-typed service had been tried for the tile and
+         removed because "background mic access is prohibited on Android 11+", and
+         concluded MediaProjection was the only way to capture from a tile. That
+         sent the whole feature down the screen-sharing route, which needs a consent
+         dialog for something the user never asked to share.
+
+         The real cause was a MISSING PERMISSION. Starting a `microphone`-typed
+         foreground service on API 34+ without FOREGROUND_SERVICE_MICROPHONE throws
+         a SecurityException — which is exactly the "throw killed the process" that
+         was observed and then misread as a platform prohibition.
+
+         Verified against Shazam on this device: its Auto Shazam tile
+         (com.shazam.android/.service.tagging.AutoTaggingTileService) holds
+         FOREGROUND_SERVICE_MICROPHONE and RECORD_AUDIO, and no projection. A tile
+         tap is a user interaction, so it may start a microphone service.
+
+         The mic also solves the problem better: it hears the phone's own speaker,
+         so audio from any app is identifiable with no sharing and no dialog. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
+    
+    <!-- maxSdkVersion 32: from API 33 the broad storage-read permission is split
+         per media type, and READ_MEDIA_AUDIO below is the one Auvy actually needs.
+         Without the cap, Android 13+ devices were still being ASKED for
+         whole-storage read access that the app has no use for — a permission the
+         user has to weigh, granting reach over their photos and documents, for
+         nothing. Declaring the ceiling shrinks what is requested on every modern
+         device with no functional change (WRITE already had it). -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO"/>
+    <!-- NO MANAGE_EXTERNAL_STORAGE. It was declared here to enumerate audio
+         the user copied into /Music/Auvy from another app, because scoped storage
+         does not let File APIs list a shared-storage directory.
+
+         It was the worst permission in this manifest. Play gates "All files
+         access" behind a special declaration that music players do not qualify
+         for, and it is a strong malware heuristic because it grants reach over
+         every document and photo on the device — for a feature that needed to
+         list ONE folder.
+
+         READ_MEDIA_AUDIO above covers it: MainActivity's "listAudioIn" channel
+         queries MediaStore by RELATIVE_PATH, which finds those files whichever
+         app wrote them. Do not re-add the permission. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
+
+    <!-- Wake-up alarm (music instead of a ringtone). USE_EXACT_ALARM is the
+         alarm-clock use case Google grants without a prompt; SCHEDULE_EXACT_ALARM
+         covers Android 12, where the user may have to allow it in Settings.
+         RECEIVE_BOOT_COMPLETED re-arms the alarm after a reboot — Android drops
+         every alarm on restart, so without it the alarm silently stops working
+         the first time the phone reboots. -->
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM"/>
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+    <!-- A background BroadcastReceiver cannot startActivity() on Android 10+, so
+         the alarm presents itself via a FULL-SCREEN INTENT notification instead —
+         which also works over the lockscreen. Granted by default for apps whose
+         notification is CATEGORY_ALARM. -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT"/>
+    
+    <application
+        android:label="Auvy"
+        android:name="${applicationName}"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        tools:replace="android:allowBackup">
+        <!-- Android Auto browsing. -->
+        <meta-data
+            android:name="com.google.android.gms.car.application"
+            android:resource="@xml/automotive_app_desc"/>
+
+        <!-- The MediaBrowserService intent-filter below is what enables Android
+             Auto — but it ALSO opts the app into Android 11+ MEDIA RESUMPTION,
+             which is why it was removed once before: SystemUI kept a
+             "resumable" media pill in quick settings that survived process
+             death and reappeared after being dismissed (the "notification keeps
+             coming back like a virus" bug).
+
+             It is safe to have back because the resumption probe is now
+             REJECTED at the source: SystemUI asks for the special `recent`
+             root, and AuvyAudioHandler.getRoot throws for that id while serving
+             a real tree for Android Auto's `root`. No recent root → nothing for
+             SystemUI to resurrect, while Auto browsing works. If the zombie
+             pill EVER returns, check that getRoot override first — don't just
+             delete this filter again. -->
+        <service
+            android:name="com.ryanheise.audioservice.AudioService"
+            android:foregroundServiceType="mediaPlayback"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.media.browse.MediaBrowserService" />
+            </intent-filter>
+        </service>
+        
+        <receiver
+            android:name="com.ryanheise.audioservice.MediaButtonReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Home-screen player widget (artwork, prev/play/next, like). State is
+             pushed from the Dart audio handler; buttons route through the media
+             session's MediaButtonReceiver (transport) and the widget channel
+             (like). -->
+        <!-- The widget BUTTONS. Not exported: an AppWidgetProvider has to be
+             exported to hear APPWIDGET_UPDATE from the system, and an exported
+             receiver accepts explicit intents from any app regardless of its
+             intent-filter — which would have let any installed app skip tracks,
+             toggle playback or flip a like. The widget's own PendingIntents
+             reach this fine because the app mints them itself. -->
+        <receiver
+            android:name=".WidgetActionReceiver"
+            android:exported="false" />
+
+        <receiver
+            android:name=".PlayerWidgetProvider"
+            android:label="@string/widget_player_label"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_player_info" />
+        </receiver>
+        
+        <!-- "Capture app audio" for song recognition. NOT exported — only Auvy
+             starts it, and it carries a MediaProjection grant. -->
+        <!-- Two types, because it captures two ways: `microphone` for the tile
+             (hears the phone's own speaker, no sharing) and `mediaProjection` for
+             the in-app this-device capture. Declaring only the type in use at
+             startForeground time is what matters; listing both lets one service
+             serve both paths instead of duplicating it. -->
+        <service
+            android:name=".AudioCaptureService"
+            android:foregroundServiceType="microphone|mediaProjection"
+            android:exported="false" />
+
+
+        <!-- Invisible consent shim for the tile. MediaProjection consent must come
+             from a visible Activity, and a TileService is not one — so this is the
+             smallest possible activity that can host the dialog. Translucent, no
+             title, excluded from recents: it must never look like a screen. -->
+        <activity
+            android:name=".TileCaptureActivity"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:exported="false" />
+        <activity
+            android:name=".CaptureConsentActivity"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:exported="false" />
+
+        <!-- Quick-settings tile: identify what is playing in ANOTHER app without
+             leaving it. The home-button "hold for assistant" gesture Google uses
+             is reserved for the device's default assistant and cannot be claimed
+             by an ordinary app; a tile is the sanctioned equivalent and the same
+             single gesture. See RecognizeTileService. -->
+        <service
+            android:name=".RecognizeTileService"
+            android:label="Identify song"
+            android:icon="@android:drawable/ic_btn_speak_now"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
+        <!-- Plays the wake-up alarm itself, so the music does not wait for the
+             user to tap a notification. mediaPlayback (not a bespoke type)
+             because that is what it is: it plays audio the user asked for.
+             NOT exported — only AlarmReceiver and its own notification actions
+             start it, so no other app can make the user's phone ring. -->
+        <service
+            android:name=".AlarmAudioService"
+            android:foregroundServiceType="mediaPlayback"
+            android:exported="false" />
+
+        <!-- Wake-up alarm receiver. NOT exported: only AlarmManager and the
+             system's BOOT_COMPLETED broadcast need to reach it, and both work
+             without export — exporting it would let any app fire the user's
+             alarm. -->
+        <receiver
+            android:name=".AlarmReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.auvy.app.ALARM" />
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
+
+        <!-- singleTask, NOT singleTop — THE THEMED-ICON ALIASES MAKE IT MANDATORY.
+             singleTop only reuses an instance already on top of the SAME task, and
+             the entry points do not agree on a component name: the launcher opens
+             whichever alias is enabled (.MainActivityRed / Green / Default — see
+             AlternateIconManager), while audio_service's notification, the QS tile
+             and AudioCaptureService all target .MainActivity directly.
+
+             Under singleTop those land in DIFFERENT TASKS, so the app runs twice:
+             two activities, two Flutter engines, two LibraryNotifiers. Observed
+             live as the task id changing from t7346 (.MainActivityRed, launched
+             from home) to t7363 (.MainActivity, launched from the notification).
+
+             The second engine then wins NativePlayerManager's `activeChannel`
+             ("latest channel always wins"), so the instance the user is LOOKING at
+             holds a dead channel — its resolveStream calls reach an engine with no
+             screen, and nothing plays. That is the "nothing plays when I enter the
+             app in an informal way" report, and the duplicate LibraryNotifier is a
+             second writer over one library.
+
+             singleTask guarantees ONE instance in ONE task no matter which alias
+             or component asked for it; repeat launches arrive through onNewIntent,
+             which this activity already handles (EXTRA_FOUND, alarm and mic
+             extras are all read there as well as in onCreate). -->
+        <activity
+            android:name=".MainActivity"
+            android:screenOrientation="portrait"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:theme="@style/LaunchTheme"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true"
+            android:windowSoftInputMode="adjustResize">
+            <meta-data
+                android:name="io.flutter.embedding.android.NormalTheme"
+                android:resource="@style/NormalTheme"
+                />
+            <!-- NO launcher intent-filter here, deliberately.
+                 MainActivity is the targetActivity of every icon alias below, so
+                 it must stay ENABLED forever. The first version of this feature
+                 made it double as the "default icon" launcher entry — so choosing
+                 a colour disabled it, which killed the home-screen entry and
+                 Android reported "app is unavailable". The default icon is now
+                 the `.MainActivityDefault` alias instead, and the switcher never
+                 touches this activity. -->
+        </activity>
+
+        <!-- LAUNCHER ICONS (Settings → Appearance → App icon)
+             Every launcher entry is an alias pointing at MainActivity; each
+             carries its own icon. Exactly ONE may be enabled at a time — two and
+             the app appears twice in the launcher, zero and it vanishes with no
+             way back in. `.MainActivityDefault` ships ENABLED as the default; the
+             colours ship disabled. AlternateIconManager enables the chosen one
+             and disables the other aliases in a single pass.
+             android:exported="true" is required on API 31+ for anything with an
+             intent-filter. targetActivity must be the fully-qualified name. -->
+        <activity-alias
+            android:name=".MainActivityDefault"
+            android:targetActivity="com.auvy.app.MainActivity"
+            android:theme="@style/LaunchTheme"
+            android:enabled="true"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher"
+            android:roundIcon="@mipmap/ic_launcher"
+            android:label="Auvy">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".MainActivityGreen"
+            android:targetActivity="com.auvy.app.MainActivity"
+            android:theme="@style/LaunchTheme"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_green"
+            android:roundIcon="@mipmap/ic_launcher_green"
+            android:label="Auvy">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".MainActivityOrange"
+            android:targetActivity="com.auvy.app.MainActivity"
+            android:theme="@style/LaunchTheme"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_orange"
+            android:roundIcon="@mipmap/ic_launcher_orange"
+            android:label="Auvy">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".MainActivityPink"
+            android:targetActivity="com.auvy.app.MainActivity"
+            android:theme="@style/LaunchTheme"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_pink"
+            android:roundIcon="@mipmap/ic_launcher_pink"
+            android:label="Auvy">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".MainActivityPurple"
+            android:targetActivity="com.auvy.app.MainActivity"
+            android:theme="@style/LaunchTheme"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_purple"
+            android:roundIcon="@mipmap/ic_launcher_purple"
+            android:label="Auvy">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".MainActivityRed"
+            android:targetActivity="com.auvy.app.MainActivity"
+            android:theme="@style/LaunchTheme"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_red"
+            android:roundIcon="@mipmap/ic_launcher_red"
+            android:label="Auvy">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity-alias>
+
+        <!-- Native YouTube sign-in screen (a plain WebView — the same approach every
+             login — the Flutter-plugin WebView kept tripping Google's
+             "browser may not be secure" checks). -->
+        <activity
+            android:name=".LoginActivity"
+            android:exported="false"
+            android:theme="@style/NormalTheme" />
+
+        <!-- Discord sign-in WebView for Rich Presence (captures the account's
+             gateway token — the OAuth bearer can't publish activities). -->
+        <activity
+            android:name=".PresenceLoginActivity"
+            android:exported="false"
+            android:theme="@style/NormalTheme" />
+
+        <activity
+            android:name="com.linusu.flutter_web_auth_2.CallbackActivity"
+            android:exported="true"
+            android:launchMode="singleTop">
+            <intent-filter android:label="flutter_web_auth_2">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="com.auvy.app" android:host="callback" />
+            </intent-filter>
+        </activity>
+        
+        <meta-data
+            android:name="flutterEmbedding"
+            android:value="2" />
+    </application>
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.PROCESS_TEXT"/>
+            <data android:mimeType="text/plain"/>
+        </intent>
+        
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.DEFAULT" />
+            <data android:mimeType="application/vnd.android.package-archive" />
+        </intent>
+    </queries>
+</manifest>

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Native pre-Flutter launch window (API 21+). Solid near-black to match the
+     app's DynamicBackground base — no white flash before the Flutter splash. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@android:color/black" />
+</layer-list>

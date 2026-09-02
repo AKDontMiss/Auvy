@@ -1,0 +1,6 @@
+{
+  "//": "Wires firestore.rules to the Firebase CLI so the rules protecting user backups and Listen Together rooms can be diffed, reviewed and deployed from the repo instead of being edited by hand in the console. Deploy with: firebase deploy --only firestore:rules",
+  "firestore": {
+    "rules": "firestore.rules"
+  }
+}

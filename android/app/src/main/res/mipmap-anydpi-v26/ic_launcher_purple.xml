@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Without this file Android treats the square bitmap as a LEGACY icon: it
+     shrinks it to fit inside the launcher mask and pads the rest, so the art sat
+     visibly inside the icon shape while every other app reached the edge. The
+     background layer below fills the canvas, so the mask itself becomes the
+     icon's silhouette. -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_purple_background" />
+    <foreground android:drawable="@mipmap/ic_launcher_purple_foreground" />
+    <monochrome android:drawable="@mipmap/ic_launcher_purple_foreground" />
+</adaptive-icon>

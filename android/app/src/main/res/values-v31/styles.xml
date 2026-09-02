@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Android 12+ makes the splash screen a PLATFORM feature: it composes its
+         own screen from windowSplashScreenBackground plus the launcher icon, and
+         ignores windowBackground. There is no attribute that turns it off.
+         Pinning the background black (below) was already done, but the ICON was
+         still drawn — so a cold start showed the launcher icon on its own plate
+         for a beat, then jumped to Auvy's morph sequence. Two splash screens.
+
+         Supplying a TRANSPARENT icon is the supported way to silence that beat:
+         the system splash still runs, but it is now a plain black screen that is
+         pixel-identical to the first frame of the Flutter splash, so the hand-off
+         is invisible and the sequence looks like it starts immediately.
+
+         Keep this black in step with drawable/launch_background.xml and with
+         the Flutter splash backdrop. If any of the three drifts, the mismatch
+         reappears as a one-frame flash — the exact artifact this removes. -->
+    <style name="LaunchTheme" parent="@android:style/Theme.Black.NoTitleBar">
+        <item name="android:windowSplashScreenBackground">#FF000000</item>
+        <item name="android:windowBackground">@drawable/launch_background</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/splash_invisible</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">@android:color/transparent</item>
+    </style>
+    <style name="NormalTheme" parent="@android:style/Theme.Black.NoTitleBar">
+        <item name="android:windowBackground">?android:colorBackground</item>
+    </style>
+</resources>

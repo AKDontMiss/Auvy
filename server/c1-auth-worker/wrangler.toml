@@ -1,0 +1,30 @@
+﻿name = "auvy-c1-auth"
+main = "worker.js"
+compatibility_date = "2024-09-01"
+
+# â”€â”€ KV: the user roster (approval decisions + who has signed in) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+#
+# The Worker is no longer stateless: it records every account that tries to sign
+# in so they can be REVIEWED, and stores approve/block decisions. Without this the
+# app is open to anyone holding the APK, and the free quota is one script away
+# from being exhausted for everybody.
+#
+# Create it once, then paste the ids below:
+#   wrangler kv namespace create USERS
+#   wrangler kv namespace create USERS --preview
+#
+# The FREE KV tier allows ~1,000 WRITES/day (reads are ~100k), which is why the
+# Worker writes a record on SIGN-IN only â€” never per request â€” and batches the
+# global counter. Don't add per-request writes here.
+[[kv_namespaces]]
+binding = "USERS"
+id = "YOUR_KV_NAMESPACE_ID"
+preview_id = "YOUR_KV_PREVIEW_ID"
+
+# Secrets are NOT put here (they'd be committed). Set them with:
+#   wrangler secret put FIREBASE_SA_EMAIL
+#   wrangler secret put FIREBASE_SA_PRIVATE_KEY
+#   wrangler secret put BACKUP_ENC_SERVER_SECRET
+#   wrangler secret put ADMIN_TOKEN        # guards /admin/* â€” make it long
+#   wrangler secret put OWNER_IDENTITIES   # your email/handle â†’ godmode, never
+#                                          # rate-limited, auto-approved

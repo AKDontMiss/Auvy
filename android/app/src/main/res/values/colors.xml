@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Adaptive-icon BACKGROUND layers, one per launcher variant (the accent icons
+     are swapped through the activity-alias entries in AndroidManifest).
+
+     Each value is sampled from that icon's own badge fill, which matters: the
+     foreground layer is the glyph alpha-keyed out of the badge, so its
+     anti-aliased edges still carry a little of the badge colour. Painting the
+     background in the SAME colour makes those edges invisible. A generic dark
+     grey here would ring every glyph with a faint halo.
+
+     Regenerate with tool/gen_adaptive_icons.ps1. Previously this file held a
+     single #121212 left over from flutter_launcher_icons, which is why the
+     generator must write HERE rather than to its own file — two files defining
+     ic_launcher_background is a "Duplicate resources" build failure. -->
+<resources>
+    <color name="ic_launcher_background">#29282D</color>
+    <color name="ic_launcher_green_background">#2A282D</color>
+    <color name="ic_launcher_orange_background">#2C282E</color>
+    <color name="ic_launcher_pink_background">#2C282E</color>
+    <color name="ic_launcher_purple_background">#2B282E</color>
+    <color name="ic_launcher_red_background">#2E292F</color>
+</resources>

@@ -1,0 +1,134 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isUser(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    match /user_backups/{userId}/{document=**} {
+      allow read, write: if isUser(userId);
+    }
+
+    match /listen_sessions/{code} {
+
+      //`get`, NOT `read`. `read` grants BOTH `get` and `list`, and `list` is a
+      // collection query — with it, any signed-in client could enumerate every
+      // active session and read what all of them are playing, without knowing a
+      // single code. Nothing in the app lists this collection: a guest fetches
+      // exactly one room, by the code they were given.
+      //
+      // `list` is denied EXPLICITLY rather than by omission. Omission has the same
+      // effect, but this is a rule whose absence is the vulnerability — spelling
+      // it out means a future edit has to delete something deliberate to reopen
+      // the hole.
+      allow get: if isAuthenticated();
+      allow list: if false;
+
+      // Creating a room requires stamping YOURSELF as the host — you cannot open
+      // a session that someone else appears to own.
+      //
+      // The key guard keeps a create from smuggling in unexpected fields.
+      // `hostSeenMs` is the host's liveness stamp (host migration reads it) and
+      // `execAtServerMs` is the instant a scheduled play/pause fires; both are
+      // written by the same `set(merge: true)` that seeds the room, so a create
+      // that lands first would be denied without them listed here.
+      allow create: if isAuthenticated()
+                    && request.resource.data.hostId == request.auth.uid
+                    && request.resource.data.keys().hasOnly(
+                         ['active', 'hostId', 'hostName', 'rev', 'createdAtMs',
+                          'track', 'isPlaying', 'positionMs', 'atServerMs',
+                          'hostSeenMs', 'execAtServerMs', 'ping'])
+                    && request.resource.data.hostName is string
+                    && request.resource.data.hostName.size() <= 64;
+
+      // hostId IS NO LONGER PINNED, AND THAT IS DELIBERATE.
+      //
+      // It was immutable so that nobody holding a code could seize playback from
+      // the host. That property still holds — host migration only adds two narrow,
+      // checkable ways for the ROLE to move:
+      //
+      //   1. the CURRENT host names a successor. It already controls the session,
+      //      so handing it on grants nothing it did not already have; and
+      //   2. a member claims a room whose host has stopped stamping hostSeenMs
+      //      for 70 seconds, and can only name ITSELF. A live host cannot be
+      //      displaced: it refreshes that stamp every 25 seconds, including while
+      //      paused.
+      //
+      // Why the role has to be able to move at all: the host was a single point of
+      // failure, so one person closing the app ended everybody else's session.
+      //
+      // The 70 seconds here MUST stay in step with _hostGoneMs in
+      // listen_together_provider.dart. A client that gives up sooner than the rule
+      // allows is simply denied and retries; one that gives up later leaves the
+      // session leaderless for longer than intended.
+      allow update: if isAuthenticated()
+                    && (
+                      resource.data.hostId == request.auth.uid
+                      || (request.resource.data.hostId == request.auth.uid
+                          && resource.data.hostSeenMs is int
+                          && resource.data.hostSeenMs
+                               < request.time.toMillis() - 70000)
+                    );
+      allow delete: if isAuthenticated()
+                    && resource.data.hostId == request.auth.uid;
+
+      // Presence. Each member owns exactly one document, keyed by their uid, so
+      // the id check alone pins a write to its author. Guest→host requests ride on
+      // this same document, so no extra permission is involved.
+      //
+      // `list` IS allowed here, unlike the parent: the roster watcher genuinely
+      // queries this subcollection, and reaching it at all requires already
+      // knowing the room code.
+      match /members/{memberUid} {
+        allow read: if isAuthenticated();
+        allow create, update: if isUser(memberUid);
+
+        // Self-check FIRST so `||` short-circuits: a member leaving costs no
+        // lookup. The `get()` only runs when the HOST is clearing someone else.
+        allow delete: if isUser(memberUid)
+                      || (isAuthenticated()
+                          && get(/databases/$(database)/documents/listen_sessions/$(code))
+                               .data.hostId == request.auth.uid);
+      }
+
+      // ── The mirrored queue ──────────────────────────────────────────────
+      //
+      // Its own document rather than a field on the room, because the room is
+      // rewritten on every heartbeat and the queue changes rarely — carrying a
+      // 60-track list on the room doc would multiply a listener's mobile data by
+      // the heartbeat rate for nothing.
+      //
+      // ONLY THE HOST WRITES IT. A listener's queue edit travels as a request on
+      // that listener's own member document; the host applies it to its real queue
+      // and re-mirrors the result. So there is exactly one writer, and a guest
+      // cannot rewrite what everyone else sees as "up next". `hostId` is read from
+      // the room, so after a host migration the rule follows the new host with no
+      // change here.
+      //
+      // `list` denied for the same reason as the parent collection: nothing
+      // enumerates this, and allowing it would let anyone holding a code walk the
+      // session's documents.
+      match /state/{stateDoc} {
+        allow get: if isAuthenticated();
+        allow list: if false;
+        allow create, update, delete:
+                    if isAuthenticated()
+                    && get(/databases/$(database)/documents/listen_sessions/$(code))
+                         .data.hostId == request.auth.uid;
+      }
+    }
+
+    // ── Everything else: DENY ──────────────────────────────────────────────
+    // Explicit, so that adding a collection to the app without adding a rule
+    // fails closed and visibly, instead of inheriting someone's old catch-all.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Native pre-Flutter launch window. Solid near-black to match the app's
+     DynamicBackground base, so cold start flows seamlessly into the Flutter
+     splash with no white flash (the previous drawable was @android:color/white). -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@android:color/black" />
+</layer-list>
