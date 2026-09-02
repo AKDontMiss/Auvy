@@ -13,7 +13,7 @@
 <br/>
 
 [![Latest release](https://img.shields.io/github/v/release/AKDontMiss/Auvy?style=for-the-badge&labelColor=0d1117)](../../releases)
-[![License](https://img.shields.io/github/license/AKDontMiss/Auvy?style=for-the-badge&labelColor=0d1117)](LICENSE)
+[![License](https://img.shields.io/badge/License-GPL_3.0-orange?style=for-the-badge&labelColor=0d1117)](LICENSE)
 [![Flutter](https://img.shields.io/badge/Flutter-02569B?style=for-the-badge&logo=flutter&logoColor=white&labelColor=0d1117)](https://flutter.dev)
 
 <br/>
