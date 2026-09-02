@@ -60,8 +60,8 @@ android {
         // not read the pubspec value — and tag the release `v<name>+<code>`
         // (v1.2.8+2080); a bare `v1.2.8` parses as build 0 and the updater
         // silently never offers it.
-        versionCode = 2080
-        versionName = "1.2.8"
+        versionCode = 2090
+        versionName = "1.2.9"
 
         // ── Ship ONE architecture ───────────────────────────────────────────
         //

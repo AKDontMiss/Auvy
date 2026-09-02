@@ -1971,7 +1971,10 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
   ///
   /// The override map is the source of truth for a deliberately-set cover, so
   /// the item follows it rather than the other way round.
-  void _reconcileCustomCovers() {
+  /// [persist] is false when the caller is about to save anyway — a rename
+  /// already writes the library, and two disk writes for one user action is
+  /// waste.
+  void _reconcileCustomCovers({bool persist = true}) {
     try {
       final overrides = ref.read(artworkOverrideProvider);
       if (overrides.isEmpty) return;
@@ -1997,7 +2000,7 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
         state = state.copyWith(allItems: items);
         // Not user-initiated: this is repair, and it must not be able to empty
         // the library if something upstream went wrong.
-        _saveToDisk(userInitiated: false);
+        if (persist) _saveToDisk(userInitiated: false);
       }
     } catch (_) {
       // A cover that fails to reconcile is cosmetic; never block the load.
@@ -2465,19 +2468,46 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
     // 3. The custom cover. setOverride re-encodes from the stored file, so the
     //    image survives the move; the old key is then dropped so it cannot be
     //    resurrected by a future playlist that happens to reuse the name.
+    //
+    // A MANUAL COVER IS STORED TWICE, AND ONLY ONE COPY USED TO MOVE.
+    // _commitPendingCover writes the override AND copies that same file path
+    // into LibraryItem.image. setOverride writes a fresh versioned filename
+    // every time and clearOverride deletes the old file, so moving only the
+    // override left item.image pointing at a file that had just been deleted:
+    // a coverless playlist in the library grid, while the home mosaic (which
+    // resolves through the override map) still looked right. The heal at the
+    // next library load re-pointed it, so the cover came back after a restart
+    // — which is exactly what made this look random rather than reproducible.
     try {
       final overrides = ref.read(artworkOverrideProvider);
       final oldKey = 'playlist:$oldName';
       final existing = overrides[oldKey];
       if (existing != null && existing.isNotEmpty) {
         final notifier = ref.read(artworkOverrideProvider.notifier);
-        await notifier.setOverride('playlist:$next', existing);
-        await notifier.clearOverride(oldKey);
+        // THE RETURN VALUE MATTERS. It used to be discarded and clearOverride
+        // ran regardless, so a re-encode that failed — unreadable source file,
+        // no space, a decoder that rejected the bytes — deleted the only
+        // remaining copy of a cover the user had chosen. Keep the old key when
+        // the move did not land; a cover under the wrong name is recoverable,
+        // a deleted one is not.
+        final moved = await notifier.setOverride('playlist:$next', existing);
+        if (moved) {
+          await notifier.clearOverride(oldKey);
+        } else {
+          print('WARN: the cover did not survive renaming "$oldName" to '
+              '"$next" — keeping it under the old key rather than deleting '
+              'the last copy');
+        }
       }
     } catch (_) {
       // The rename itself already succeeded; a cover that fails to move is a
       // cosmetic loss, not a reason to leave the library half-renamed.
     }
+
+    // item.image still holds the path from before the rename. The override map
+    // is the source of truth for a deliberate cover, so make the item follow
+    // it. persist: false because the _saveToDisk below already covers this.
+    _reconcileCustomCovers(persist: false);
 
     _applyFilterAndSort();
     _saveToDisk();

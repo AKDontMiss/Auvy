@@ -40,6 +40,14 @@ class AudioService {
     /// hold tags and cover art. For DOWNLOADS ONLY — playback leaves it false and
     /// keeps the higher-quality codec.
     bool preferMp4 = false,
+
+    /// Asked between clients whether this resolve is still worth finishing.
+    /// Playback passes "is this still the current track" so a skip abandons the
+    /// chain instead of spending the remaining clients — and a signed-in retry —
+    /// on a track already off screen, then drawing session-wide conclusions from
+    /// its failure. Background work (cache warming, downloads) leaves it null:
+    /// nothing there is waiting on the user's attention.
+    bool Function()? isStillWanted,
   }) async {
     // DIRECT URLs: podcast episode audio (RSS enclosure .mp3) and live radio
     // streams already ARE the playable URL — their id IS an http(s) URL. They
@@ -58,14 +66,14 @@ class AudioService {
     }
 
     if (_isVideoId(id)) {
-      final res = await _resolver.resolve(id, lowQuality: lowQuality, clientStartIndex: clientStartIndex, maxBitrate: maxBitrate, preferMp4: preferMp4);
+      final res = await _resolver.resolve(id, lowQuality: lowQuality, clientStartIndex: clientStartIndex, maxBitrate: maxBitrate, preferMp4: preferMp4, isStillWanted: isStillWanted);
       if (res != null) return _withUa(res);
     }
 
     if (title.trim().isNotEmpty) {
       final vid = await _findBestVideoId(title, artist);
       if (vid != null) {
-        final res = await _resolver.resolve(vid, lowQuality: lowQuality, clientStartIndex: clientStartIndex, maxBitrate: maxBitrate, preferMp4: preferMp4);
+        final res = await _resolver.resolve(vid, lowQuality: lowQuality, clientStartIndex: clientStartIndex, maxBitrate: maxBitrate, preferMp4: preferMp4, isStillWanted: isStillWanted);
         if (res != null) return _withUa({...res, 'videoId': vid});
       }
     }

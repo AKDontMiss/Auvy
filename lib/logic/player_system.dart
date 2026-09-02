@@ -821,9 +821,39 @@ extension PlayerSystemController on PlayerNotifier {
           lowQuality: lowQuality,
           clientStartIndex: rot,
           maxBitrate: ceiling,
+          // STOP RESOLVING A TRACK THE USER HAS ALREADY LEFT.
+          //
+          // The chain tries five clients and then a signed-in retry, which can
+          // run for seconds. On 2026-09-02 a gated track was skipped at
+          // 21:56:16.8; its resolve carried on until :19.3, well after the next
+          // track was playing, and then declared "every client refused" and
+          // marked the visitor id stale — a session-wide verdict drawn from a
+          // track nobody was waiting for, which then applies to the track the
+          // user DID move to. A mid-track re-resolve is unaffected: there the
+          // videoId being asked about IS the current song.
+          isStillWanted: () => currentState.currentSong?.id == videoId,
         );
         final url = stream?['url'];
         if (url == null || url.isEmpty) {
+          // A SKIP IS NOT A REFUSAL, AND THIS STREAK HAS TEETH.
+          //
+          // An abandoned resolve (isStillWanted above) also returns null here,
+          // and counting it would let the user's own skipping trip
+          // _maxNoStreamStreak — which sets _resolveCooldownUntilMs and then
+          // suppresses EVERY resolve for an exponentially growing window. Three
+          // fast skips would have stopped playback from resolving anything,
+          // which is a far worse symptom than the one being guarded against.
+          //
+          // Re-checking the same condition the predicate used is what separates
+          // the two cases: the track moving on is why the resolve returned
+          // nothing. If it genuinely failed AND the user has since skipped, not
+          // counting it is still right — the failure cannot be attributed and
+          // the track is gone either way.
+          if (currentState.currentSong?.id != videoId) {
+            print('resolve for $videoId returned nothing, but the track had '
+                'already changed — not counting it as a refusal');
+            return null;
+          }
           _noStreamStreak++;
           if (_noStreamStreak >= _maxNoStreamStreak) {
             final over = _noStreamStreak - _maxNoStreamStreak;
@@ -1904,6 +1934,46 @@ extension PlayerSystemController on PlayerNotifier {
   // ==============================================================
   // Os media item sync
   // ==============================================================
+  /// Duration to publish to the system media session: the engine's value when
+  /// it has one, otherwise the catalogue's.
+  ///
+  /// WHY THE FALLBACK EXISTS — A SKIP FROM THE NOTIFICATION LOST THE SEEK BAR.
+  ///
+  /// playSong resets PlayerState.duration to zero, and the native engine only
+  /// reports the real one on its first position tick, roughly two seconds later.
+  /// Until then this published `null`, and a MediaItem carrying no duration is
+  /// exactly what makes Android drop the seek bar and the timestamps from the
+  /// media notification. broadcastState() does patch the duration in once the
+  /// tick lands, but the panel does not re-lay-out a seek bar it has already
+  /// drawn without one, so the controls stayed bare for the whole track.
+  ///
+  /// Reproduced with `adb shell input keyevent 87`: the session went
+  /// `metadata: size=9` (no duration) and then `size=10` two seconds later,
+  /// while the notification showed neither bar nor clock the entire time. An
+  /// in-app skip looked fine only because the player page draws its own bar from
+  /// PlayerState and never consults the session.
+  ///
+  /// Song.duration is the catalogue's own `m:ss` label and is already known for
+  /// every queued track, so a skip can publish a real duration in the SAME
+  /// frame instead of waiting for audio to start.
+  ///
+  /// Returns null rather than Duration.zero for anything unparseable — live
+  /// radio has no duration, and setCurrentMediaItem substitutes its own value
+  /// for that case.
+  Duration? _mediaItemDuration(Song song, Duration fromEngine) {
+    if (fromEngine > Duration.zero) return fromEngine;
+    final parts = song.duration.split(':');
+    // "m:ss" or "h:mm:ss". Anything else is a label, not a time.
+    if (parts.length < 2 || parts.length > 3) return null;
+    var seconds = 0;
+    for (final p in parts) {
+      final v = int.tryParse(p.trim());
+      if (v == null || v < 0) return null;
+      seconds = seconds * 60 + v;
+    }
+    return seconds > 0 ? Duration(seconds: seconds) : null;
+  }
+
   void _updateMediaItem(Song song) {
     if (_audioHandler == null || currentState.currentSong == null) return;
   
@@ -1954,7 +2024,7 @@ extension PlayerSystemController on PlayerNotifier {
       album:    song.albumTitle.isNotEmpty ? song.albumTitle : 'Single',
       title:    song.title,
       artist:   song.artist,
-      duration: currentState.duration != Duration.zero ? currentState.duration : null,
+      duration: _mediaItemDuration(song, currentState.duration),
       artUri: artPath.isNotEmpty
           ? (artPath.startsWith('http') ? Uri.tryParse(artPath) : Uri.file(artPath))
           : null,
@@ -2016,8 +2086,10 @@ extension PlayerSystemController on PlayerNotifier {
       album: song.albumTitle.isNotEmpty ? song.albumTitle : 'Single',
       title: song.title,
       artist: song.artist,
-      duration:
-          currentState.duration != Duration.zero ? currentState.duration : null,
+      // Same fallback as _updateMediaItem: this re-publish can land before the
+      // engine's first tick, and republishing with a null duration would undo a
+      // seek bar that was already showing.
+      duration: _mediaItemDuration(song, currentState.duration),
       artUri: Uri.file(localPath),
     ));
   }

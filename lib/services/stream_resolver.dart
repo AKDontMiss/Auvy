@@ -47,7 +47,18 @@ class StreamResolver {
   ///
   /// [preferMp4] asks for AAC-in-MP4 instead of the better-sounding Opus, so the
   /// file can carry tags and cover art. Downloads set it; playback must not.
-  Future<Map<String, String>?> resolve(String videoId, {bool lowQuality = false, int clientStartIndex = 0, int maxBitrate = 0, bool preferMp4 = false}) async {
+  /// [isStillWanted] lets a caller abandon the chain part-way — the player
+  /// passes "is this track still the current one". See
+  /// [CatalogApiClient.getStreamUrl] for what an abandoned resolve was costing.
+  ///
+  /// ONLY THE CALL THAT STARTS THE RESOLVE CAN ABANDON IT. A later caller for
+  /// the same [_keyFor] key joins the in-flight future below and never reaches
+  /// the chain, so its own predicate is irrelevant. The reverse — the starter
+  /// abandoning a resolve a joiner still wants — needs both to ask for the same
+  /// id at the same quality at the same moment, which playback and cache warming
+  /// rarely do (playback passes a bitrate ceiling, warming does not, so their
+  /// keys differ). The loser simply resolves again later.
+  Future<Map<String, String>?> resolve(String videoId, {bool lowQuality = false, int clientStartIndex = 0, int maxBitrate = 0, bool preferMp4 = false, bool Function()? isStillWanted}) async {
     if (!_isVideoId(videoId)) return null;
 
     final cacheKey = _keyFor(videoId, lowQuality, maxBitrate, preferMp4);
@@ -58,7 +69,7 @@ class StreamResolver {
     final inflight = _pending[cacheKey];
     if (inflight != null) return inflight;
 
-    final future = _resolveInner(videoId, lowQuality, clientStartIndex, maxBitrate, preferMp4);
+    final future = _resolveInner(videoId, lowQuality, clientStartIndex, maxBitrate, preferMp4, isStillWanted);
     _pending[cacheKey] = future;
     try {
       final result = await future;
@@ -90,11 +101,16 @@ class StreamResolver {
     return '$videoId$lq$cap$mp4';
   }
 
-  Future<Map<String, String>?> _resolveInner(String videoId, bool lowQuality, int clientStartIndex, int maxBitrate, bool preferMp4) async {
+  Future<Map<String, String>?> _resolveInner(String videoId, bool lowQuality, int clientStartIndex, int maxBitrate, bool preferMp4, [bool Function()? isStillWanted]) async {
     try {
       return await _breaker.run<Map<String, String>?>(() async {
-        final res = await _innerTube.getStreamUrl(videoId, lowQuality: lowQuality, clientStartIndex: clientStartIndex, maxBitrate: maxBitrate, preferMp4: preferMp4);
+        final res = await _innerTube.getStreamUrl(videoId, lowQuality: lowQuality, clientStartIndex: clientStartIndex, maxBitrate: maxBitrate, preferMp4: preferMp4, isStillWanted: isStillWanted);
         if (res == null) {
+          // A SKIP IS NOT A YOUTUBE FAILURE, and it must not trip the breaker.
+          // Both cases arrive here as null, and treating them alike would let a
+          // few quick skips open the breaker and refuse resolves for tracks
+          // that were never asked for yet.
+          if (isStillWanted != null && !isStillWanted()) return null;
           // Treat "no playable stream" as a failure so the breaker can trip
           // when YouTube is gating many requests in a row.
           throw StateError('no playable stream for $videoId');

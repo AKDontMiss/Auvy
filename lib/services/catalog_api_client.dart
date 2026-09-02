@@ -451,8 +451,24 @@ class CatalogApiClient {
   /// the format now. [lowQuality] remains the data-saver's own hard preference.
   /// [preferMp4] asks for AAC-in-MP4 so the bytes can carry tags and cover art —
   /// set it for downloads, never for playback. See [_bestAudioFormat].
-  Future<Map<String, String>?> getStreamUrl(String videoId, {bool lowQuality = false, int clientStartIndex = 0, int maxBitrate = 0, bool preferMp4 = false}) async {
+  /// [isStillWanted] is asked before each client whether this resolve is worth
+  /// continuing — it returns false once the user has moved to another track.
+  ///
+  /// WITHOUT IT, AN ABANDONED RESOLVE KEEPS RUNNING AND POISONS THE NEXT ONE.
+  /// Caught on device 2026-09-02: the user skipped a gated track at 21:56:16.8,
+  /// the next track resolved fine at :18.4, and the resolve for the ABANDONED
+  /// track carried on until :19.3 — two more clients, a signed-in POST, and
+  /// then it declared "every client refused" and marked the visitor id stale.
+  /// That verdict was drawn from a track nobody was waiting for and it applies
+  /// to the whole session, so a track the user had already left could degrade
+  /// the resolve of the one they had moved to. It also logged an ERROR and
+  /// would have surfaced a failure for a track already off screen.
+  ///
+  /// Abandoning returns null WITHOUT touching [_visitorStale]: "the user
+  /// skipped" is not evidence about the visitor id.
+  Future<Map<String, String>?> getStreamUrl(String videoId, {bool lowQuality = false, int clientStartIndex = 0, int maxBitrate = 0, bool preferMp4 = false, bool Function()? isStillWanted}) async {
     if (videoId.isEmpty || videoId.length != 11) return null;
+    bool abandoned() => isStillWanted != null && !isStillWanted();
 
     // Stop trying further clients once the overall budget is spent, so a flaky
     // network can't stall a single play for minutes.
@@ -489,6 +505,13 @@ class CatalogApiClient {
       if (DateTime.now().isAfter(deadline)) {
         print('stream resolve deadline (${_resolveDeadline.inSeconds}s) hit — giving up on remaining clients');
         break;
+      }
+      // The user moved on. Every remaining request is spent on a track nobody
+      // is waiting for, and its eventual failure must not be read as evidence
+      // about the visitor id — so leave before the tail below runs.
+      if (abandoned()) {
+        print('stream resolve for $videoId abandoned — the track changed');
+        return null;
       }
       try {
         final raw = await _postPlayer(client, videoId, authenticated: authed);
