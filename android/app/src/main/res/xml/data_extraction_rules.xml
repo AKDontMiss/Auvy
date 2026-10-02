@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12+ backup/transfer policy.
+
+     allowBackup="false" only covers cloud backup. From Android 12 device-to-device
+     transfer is configured separately and by default includes app data, which
+     would copy session cookies and backups to a new device without signing in.
+     Both paths are denied here; data moves through Auvy's own account-based
+     restore (CloudSyncService), which re-authenticates first.
+
+     `<exclude domain="root" path="." />` covers everything in the app sandbox.
+     Downloads in /Music/Auvy are outside it and unaffected. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="root" path="." />
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="database" path="." />
+        <exclude domain="file" path="." />
+        <exclude domain="external" path="." />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="root" path="." />
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="database" path="." />
+        <exclude domain="file" path="." />
+        <exclude domain="external" path="." />
+    </device-transfer>
+</data-extraction-rules>

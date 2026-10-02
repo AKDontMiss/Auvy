@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Cleartext is permitted, and every host that matters is pinned against it.
+
+     Most internet radio streams are plain http:// (about two thirds of the
+     directory's most-voted stations), and with cleartext denied app-wide
+     ExoPlayer refused them. A radio stream is public, unauthenticated audio, so
+     no credential is ever sent to a station host.
+
+     The deny list below is the important half: every host that carries auth,
+     API keys or user data is encrypted-only, so a downgrade to http:// is
+     refused by the platform. Add any new backend to that list. -->
+<network-security-config>
+
+
+    <!--
+      Everything else may use cleartext. In practice that means radio station
+      hosts (thousands of arbitrary domains, so they cannot be enumerated) and
+      podcast feeds, which have the same properties: public, unauthenticated
+      media.
+    -->
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+    <!-- Encrypted-only, no exceptions. These carry auth, API keys or user data. -->
+    <domain-config cleartextTrafficPermitted="false">
+        <!-- The Auvy Worker: session auth, admin, lyrics, covers, directories. -->
+        <domain includeSubdomains="true">auvy.workers.dev</domain>
+        <!-- YouTube / YouTube Music: cookies and the signed-in player requests. -->
+        <domain includeSubdomains="true">youtube.com</domain>
+        <domain includeSubdomains="true">youtubei.googleapis.com</domain>
+        <domain includeSubdomains="true">music.youtube.com</domain>
+        <domain includeSubdomains="true">googlevideo.com</domain>
+        <domain includeSubdomains="true">ytimg.com</domain>
+        <domain includeSubdomains="true">googleusercontent.com</domain>
+        <!-- Google sign-in and Firebase: tokens, and the whole cloud backup. -->
+        <domain includeSubdomains="true">google.com</domain>
+        <domain includeSubdomains="true">googleapis.com</domain>
+        <domain includeSubdomains="true">firebaseio.com</domain>
+        <domain includeSubdomains="true">firebaseapp.com</domain>
+        <domain includeSubdomains="true">firebaseinstallations.googleapis.com</domain>
+        <!-- Discord: no longer used, but kept on this HTTPS-only list because removing
+             a host here would relax it (ios/Runner/Info.plist mirrors this list). -->
+        <domain includeSubdomains="true">discord.com</domain>
+        <domain includeSubdomains="true">discordapp.com</domain>
+        <!-- Update delivery: an APK fetched over cleartext could be substituted. -->
+        <domain includeSubdomains="true">github.com</domain>
+        <domain includeSubdomains="true">githubusercontent.com</domain>
+        <!-- ListenBrainz receives the user's own scrobble token in a header
+             (`Authorization: Token <token>`, see scrobble_service.dart). -->
+        <domain includeSubdomains="true">api.listenbrainz.org</domain>
+        <!--
+          Spotify: an access token is fetched from the embed endpoint and then
+          sent to the API. Not the user's account credential, but a token all the
+          same, and there is no reason to let it travel in clear.
+        -->
+        <domain includeSubdomains="true">spotify.com</domain>
+        <!-- Last.fm carries the app's API key in the query string. -->
+        <domain includeSubdomains="true">last.fm</domain>
+        <!-- Archive.org: no credential, pinned for integrity. It serves audiobook
+             audio and covers over https everywhere, so requiring it costs nothing. -->
+        <domain includeSubdomains="true">archive.org</domain>
+    </domain-config>
+
+</network-security-config>

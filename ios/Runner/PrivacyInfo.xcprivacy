@@ -1,0 +1,177 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The app's own privacy manifest.
+
+  Required since May 2024: an upload is rejected (ITMS-91053, "Missing API
+  declaration") when the binary calls a "required reason" API without
+  declaring why. The pods ship their own manifests; this one covers Auvy's own
+  Swift and Dart code.
+
+  Each entry below comes from the code:
+
+   • UserDefaults — AuvySystemChannels stores the pending app-icon variant
+     there, and shared_preferences is the whole settings store.
+   • File timestamps — AuvyStreamLoader.evictCacheIfNeeded sorts the fetched
+     track cache by `contentAccessDate`, and library_export_service sorts
+     backups by modification date (C617.1: files in the app's own container).
+     settings_page also SHOWS a backup's date to the user (DDA9.1).
+   • System boot time — AuvyStreamLoader times its range fetches with
+     `ProcessInfo.systemUptime` to measure the link's throughput (35F9.1:
+     elapsed time between events inside the app).
+
+  Disk space is not declared: the Storage screen adds up the sizes of files
+  the app wrote itself, and nothing queries volume capacity.
+
+  ── NSPrivacyCollectedDataTypes ────────────────────────────────────────────
+
+  Based on what leaves the device and what is retained at the other end.
+  Apple counts data as "collected" when it is transmitted off the device and
+  kept longer than needed to service the request in real time.
+
+  WHERE DATA GOES, AND WHAT IS KEPT:
+
+   • The Auvy Worker (the app's own backend) — the launch gate and account
+     registry. Each call POSTs the Google session cookie, a display hint and a
+     device record. Its D1 schema keeps: `users(uid, identity, status, …)`,
+     `devices(uid, device_id, label, …)` and `aliases(cookie_key → uid)`.
+     `identity` is the Google account it resolves; `cookie_key` is a SHA-256 of
+     the SAPISID, and the cookie VALUE is never stored — the Worker logs cookie
+     names only, deliberately ("never values, which are live credentials").
+   • Firestore `user_backups/{uid}` — the library backup: playlists, liked
+     songs, listening history, play counts, recently played, recognition history
+     and settings. AES-GCM encrypted on the device before upload, but retained,
+     so it is collected whether or not the server can read it.
+   • The device id in that registry is RANDOM AND PER-INSTALL (see
+     AccountProvider._deviceInfo) — deliberately not IDFV, not a serial, and it
+     dies with the app's data. Declared as a Device ID anyway: it identifies a
+     device to the developer, which is what the category is about.
+
+  WHAT IS NOT COLLECTED, AND WHY IT IS NOT LISTED:
+
+   • AUDIO. Song recognition fingerprints the microphone buffer ON THE DEVICE
+     and sends only the signature to Shazam's discovery endpoint. No recording
+     is transmitted or stored, so "Audio Data" does not apply.
+   • SEARCH QUERIES. Searches go to YouTube Music to service the search and are
+     not persisted to the backup — only the toggle that governs them is.
+   • ANALYTICS / CRASH. There is no analytics or crash SDK in the app;
+     Firebase is core + auth + firestore + app-check only. The diagnostics
+     report is written locally and shared by the user, never sent anywhere.
+   • ADVERTISING. Nothing, hence NSPrivacyTracking false and no tracking
+     domains.
+
+  The Google session cookie is sent to the Worker on every launch but not
+  retained there (only its hash is), so it is not declared as collected. If the
+  Worker ever logs or stores the cookie value, this file must change too. Check
+  these declarations against the App Store privacy questionnaire before
+  submitting.
+-->
+<plist version="1.0">
+<dict>
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array>
+		<dict>
+			<!-- The account the Worker resolves from the session cookie, stored
+			     as `users.identity`. -->
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeEmailAddress</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
+		<dict>
+			<!-- The uid: sha256(salt + identity), and the Firestore backup path. -->
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeUserID</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
+		<dict>
+			<!-- The random per-install id behind "Active devices". -->
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeDeviceID</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
+		<dict>
+			<!-- Playlists, liked songs, the library, cover overrides — the
+			     encrypted backup blob. -->
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeOtherUserContent</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
+		<dict>
+			<!-- Listening history, play counts, recently played, recognition
+			     history. Personalisation as well as function: the taste model
+			     that drives recommendations is built from these. -->
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeProductInteraction</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+				<string>NSPrivacyCollectedDataTypePurposeProductPersonalization</string>
+			</array>
+		</dict>
+	</array>
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>CA92.1</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>C617.1</string>
+				<string>DDA9.1</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategorySystemBootTime</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>35F9.1</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

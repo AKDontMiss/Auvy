@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Home-screen player widget (shown in the launcher's widget picker). -->
+    <string name="widget_player_label">Now Playing</string>
+    <string name="widget_player_desc">Control playback and like the current song from your home screen.</string>
+</resources>

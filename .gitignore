@@ -1,0 +1,107 @@
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.env
+
+# Release signing — NEVER commit these
+android/key.properties
+*.jks
+*.keystore
+.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# The .vscode folder contains launch configuration and tasks you configure in
+# VS Code which you may wish to be included in version control, so this line
+# is commented out by default.
+#.vscode/
+
+# Flutter/Dart/Pub related
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+/build/
+
+# Gradle writes here too, and the root-only rule above never covered it. A
+# problems-report.html had been committed and was then copied into the PUBLIC
+# export, because that export walks `git ls-files`.
+android/build/
+**/.gradle/
+
+# iOS
+#
+# ADDED BY HAND, because `flutter create` does not merge into an existing
+# .gitignore — it writes one only when there is none. So adding the iOS
+# platform to a project this old brings the folder and none of its ignores,
+# and the first `pod install` on a Mac then offers to commit the entire Pods
+# tree plus machine-specific paths.
+#
+# Generated.xcconfig and flutter_export_environment.sh matter most: they hold
+# absolute paths to the developer's own Flutter SDK, and — on the build script
+# path — the --dart-define values, which is how a key ends up in a repo.
+**/ios/Pods/
+**/ios/.symlinks/
+**/ios/**/xcuserdata/
+**/ios/**/DerivedData/
+**/ios/**/*.mode1v3
+**/ios/**/*.mode2v3
+**/ios/**/*.moved-aside
+**/ios/**/*.pbxuser
+**/ios/**/*.perspectivev3
+**/ios/.generated/
+**/ios/Flutter/App.framework
+**/ios/Flutter/Flutter.framework
+**/ios/Flutter/Flutter.podspec
+**/ios/Flutter/Generated.xcconfig
+**/ios/Flutter/ephemeral/
+**/ios/Flutter/app.flx
+**/ios/Flutter/app.zip
+**/ios/Flutter/flutter_assets/
+**/ios/Flutter/flutter_export_environment.sh
+**/ios/ServiceDefinitions.json
+**/ios/Runner/GeneratedPluginRegistrant.*
+/coverage/
+
+# Symbolication related
+app.*.symbols
+
+# Obfuscation related
+app.*.map.json
+
+# Android Studio will place build artifacts here
+/android/app/debug
+/android/app/profile
+/android/app/release
+
+# Prevent real Google/Firebase configs from leaking (was a typo: "google-service"
+# singular never matched the real "google-services.json" → the file stayed tracked).
+google-services.json
+app/google-services.json
+android/app/google-services.json
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+!.env.example
+
+# Source images for the cover library. Converted into covers/ as 800x800 webp
+# by tool/ scripts; the originals are 356MB of jpg/png and must never be
+# committed — a single "git add ." would put them in history permanently.
+new_covers/
