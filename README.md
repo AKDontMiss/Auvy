@@ -6,7 +6,7 @@
 
 ### Music, podcasts and radio for Android and iPhone
 
-**~109k lines of Dart** across 211 files &middot; **14 Kotlin** files on media3/ExoPlayer
+**~109k lines of Dart** across 209 files &middot; **14 Kotlin** files on media3/ExoPlayer
 &middot; **7 Swift** files on AVFoundation &middot; a **4k-line Cloudflare Worker** in front
 of the third-party APIs &middot; **1,100+ tests** in 100 files
 
@@ -76,9 +76,10 @@ sat on that seam, in the gap between what one side promised and what the other
 assumed.
 
 **Code that has to keep running when nobody is looking at it.** Audio survives
-the screen going off and the OS actively trying to sleep the process — a partial
-wake lock plus a WiFi lock held across the network read (`WAKE_MODE_NETWORK`),
-and state transitions that cannot be trusted to arrive in order. Song
+the screen going off and the OS actively trying to sleep the process. That takes a
+partial wake lock plus a Wi-Fi lock held across the network read
+(`WAKE_MODE_NETWORK`), and state transitions that cannot be trusted to arrive in
+order. Song
 recognition runs in a headless isolate with the app closed and no UI to report
 into, so it has to say what it did in a log or say nothing at all.
 
@@ -86,7 +87,7 @@ into, so it has to say what it did in a log or say nothing at all.
 generous next to a microcontroller's, but the ceiling still bites: the bitrate
 ladder is chosen from measured throughput rather than a fixed guess, and image
 decode is sized to the box that will paint it, because the cost that hurt was
-never CPU — it was texture upload after the OS trimmed the cache. The tightest
+never CPU; it was texture upload after the OS trimmed the cache. The tightest
 deadline in the app is lighting a lyric line within a few milliseconds of its
 timestamp, and missing it looks bad rather than breaking anything, which is a
 softer contract than firmware gets but the same instinct: measure, don't guess.
@@ -99,16 +100,16 @@ flowchart LR
         ui["Flutter UI<br/>Riverpod state"]
         logic["Player logic<br/>queue · adaptive bitrate<br/>failure recovery"]
         native["Kotlin · media3/ExoPlayer<br/>Swift · AVFoundation"]
-        bg["With the app closed<br/>song recognition isolate<br/>What's New check"]
+        bg["App closed<br/>recognition · What's New"]
         disk[("Local storage<br/>prefs · play cache · downloads")]
     end
 
     yt["YouTube<br/>InnerTube + CDN"]
     worker["Cloudflare Worker<br/>holds every API key"]
     meta["Metadata APIs<br/>lyrics · radio · podcast feeds<br/>audiobooks · Last.fm"]
-    direct["Called directly<br/>iTunes Search · Shazam<br/>ListenBrainz"]
-    fire[("Firestore<br/>encrypted backup · per-device logs<br/>Listen Together rooms")]
-    other["Your other phone<br/>same account"]
+    fire[("Firestore<br/>encrypted backup")]
+    other["Your other phone"]
+    direct["Called directly<br/>iTunes · Shazam · ListenBrainz"]
 
     ui --> logic
     logic ==>|"platform channel"| native
@@ -118,10 +119,10 @@ flowchart LR
     logic --> disk
     logic --> worker
     worker --> meta
+    logic <-->|"sync"| fire
+    fire <--> other
     logic --> direct
     bg --> direct
-    logic <-->|"merge · pick up where it left off"| fire
-    fire <--> other
 
     classDef dart fill:#12395e,stroke:#4f8fc0,color:#fff
     classDef kt fill:#3b2b52,stroke:#9b7cc0,color:#fff
@@ -131,6 +132,7 @@ flowchart LR
     class native kt
     class disk,fire store
     class yt,worker,meta,direct,other ext
+    style phone fill:none,stroke:#8b949e,stroke-dasharray:5 4
 ```
 
 Blue is Dart, purple is native (Kotlin on Android, Swift on iPhone), green is
@@ -148,14 +150,14 @@ cache them at the edge.
 supplies its own or those features sit inert. That is the reason the box in the
 middle exists at all.
 
-The feature list above was the easy half. These are the parts I got wrong first
+The feature list further down was the easy half. These are the parts I got wrong first
 and then had to understand properly.
 
 **Caching, and what to throw away.** A phone has finite storage, so a cache is a
 budget with an eviction policy, not a folder. Auvy keeps two classes of file:
 auto-cached audio that is evictable, and downloads that never are. Eviction is
 least-recently-used with the user's most-played tracks pinned, and it trims to a
-low-water mark rather than to the limit — trimming to exactly the limit means the
+low-water mark rather than to the limit: trimming to exactly the limit means the
 next track trips it again, which I only noticed after reading a day of logs and
 finding fifty evictions where there should have been eight.
 
@@ -176,7 +178,7 @@ media3/ExoPlayer, and background recognition runs in a headless Dart isolate wit
 no screen at all. Three processes' worth of state has to agree. The subtlest bug
 I have found in this project lived exactly there: shared preferences are cached
 in memory per isolate, so a value written by Kotlin was invisible to a running
-Dart isolate until it reloaded — the feature only appeared to work after
+Dart isolate until it reloaded, so the feature only appeared to work after
 restarting the app.
 
 **An API gateway, and key custody.** A Cloudflare Worker sits in front of every
@@ -186,7 +188,7 @@ wrong there is instructive: Cloudflare caches in front of the Worker, so a cache
 response means your code never ran.
 
 **Picking the storage primitive to match the question.** The Worker is not
-stateless — it keeps a user registry and enforces rate limits — and both started
+stateless (it keeps a user registry and enforces rate limits), and both started
 on the wrong primitive. The roster lived in KV, so "how many accounts are
 pending" meant walking the keyspace and issuing one read per key, which gets
 slower with every signup; it is now one grouped `SELECT` over an index in D1,
@@ -200,15 +202,15 @@ preference, so it was reversible the whole way.
 
 **Sync, and the limits you find at the edges.** The library backs up encrypted to
 Firestore, chunked across documents because a single document has a 1 MiB cap
-that a real library quietly exceeds. Restore is the harder half — several
+that a real library quietly exceeds. Restore is the harder half: several
 settings are read once at startup, so writing them to disk is not enough; the
 providers holding them have to be told to look again. Two phones on one account
 are harder still. The first rule I wrote was "a newer backup never overwrites
 changes this phone hasn't uploaded", which sounds safe and isn't: a phone with
 one unsent change skipped the other phone's newer backup and then uploaded its
 own older copy over it. Now each push records what it sent, so a conflict is a
-three-way merge — the other phone's changes for everything this one didn't
-touch, this phone's for what it did — and the library itself merges from a
+three-way merge (the other phone's changes for everything this one didn't
+touch, this phone's for what it did), and the library itself merges from a
 per-device log of decisions. Each push also carries what's playing, so a phone
 that opens idle picks up the song where the other left off, walked forward
 through the queue by the time that passed if the other was still playing.
@@ -224,7 +226,7 @@ as a redacted text file, from an ordinary release build, with no cable and no
 developer mode.
 
 It works because the recorder taps the app's single `print` interceptor ABOVE the
-release gate. Release builds deliberately swallow log output — every call is a
+release gate. Release builds deliberately swallow log output: every call is a
 synchronous platform-log write on hot paths like the recommendation engine and
 the player, and shipping them costs real frames. The recorder sits above that
 test, so a normal user's build can still produce a transcript while staying
@@ -234,15 +236,15 @@ It is off until you turn it on, costs one boolean per line while off, buffers in
 memory and writes on a timer rather than per line, and strips anything
 token-shaped on the way out.
 
-That design has one blind spot, and finding it was instructive. Tapping the Dart
-interceptor means the transcript contains exactly what Dart printed — so the
+That design has one blind spot, and finding it taught me something. Tapping the
+Dart interceptor means the transcript contains exactly what Dart printed, so the
 Kotlin side, which logs to the system log like any Android code, was absent from
 it entirely. Audio focus was the clearest case: a phone call or another app
 taking focus is the single best explanation for "the music paused by itself", it
 was carefully logged natively, and it appeared *zero* times in any export. The
 same switch now also starts the CPU and memory sampler, and a handful of native
-events get a narrow route into the transcript — deliberately narrow, because
-that route crosses the platform boundary and wakes the Dart isolate, so it
+events get a narrow route into the transcript. It's narrow on purpose: that
+route crosses the platform boundary and wakes the Dart isolate, so it only
 carries rare, decisive things like losing audio focus or a stream being refused,
 and nothing that happens per chunk or per tick.
 
@@ -252,12 +254,12 @@ day where eight would do, a setting that had silently stopped syncing for weeks,
 a stream format being refused because two code paths asked for it differently.
 None of those produced a crash, an error dialog, or anything a user could have
 described. The headless recognition isolate reports which phase it reached for
-the same reason — a background job with no screen that simply stops tells you
+the same reason: a background job with no screen that simply stops tells you
 nothing at all.
 
 **Testing what a type cannot express.** There are over a thousand tests. Some assert on the
 source text itself, because several rules here are conventions the compiler
-cannot check — a preference filed under the wrong type is silently skipped at
+cannot check. A preference filed under the wrong type is silently skipped at
 backup time, so a test derives the correct grouping instead of trusting me to
 remember it. The ones that guard a past bug are verified by reintroducing the
 bug and watching them fail. (The suite lives in the private development
@@ -265,11 +267,14 @@ repository; this one is the source release.)
 
 ### On the AI part
 
-Nearly all of this was written with an AI assistant, and I am not going to
-pretend otherwise. What I learned is where that helps and where it does not. It
-is fast at code and unreliable at judgement: it will happily write a plausible
-fix for the wrong problem, and it does not know which of two symptoms is the
-cause. The work that mattered was reading logs from a real device, deciding what
+Nearly all of this was written with AI coding agents in the terminal, and I am
+not going to pretend otherwise. I preferred Claude (mostly Opus, in Claude Code)
+for what sits underneath: the backend, the native player, sync, and how the
+features actually behave. For the front end and the look of things I preferred
+Gemini and Antigravity. What I learned is where that helps and where it
+does not. AI is fast at code and unreliable at judgement: it will happily write
+a plausible fix for the wrong problem, and it does not know which of two
+symptoms is the cause. The work that mattered was reading logs from a real device, deciding what
 the actual failure was, and holding a line on scope. The bugs in here that took
 longest were all cases where the code was doing exactly what it was told and the
 instruction was wrong.

@@ -27,10 +27,6 @@ AudiobookQuery audiobookBrowse({
 }) =>
     (sort: sort, genre: genre, language: language, search: '', author: '');
 
-/// The hub's selection.
-final audiobookSortProvider = StateProvider<AudiobookSort>((_) => AudiobookSort.popular);
-final audiobookGenreProvider = StateProvider<String?>((_) => null);
-
 /// Null means every language. English until the listener picks another.
 final audiobookLanguageProvider = StateProvider<String?>((_) => 'English');
 

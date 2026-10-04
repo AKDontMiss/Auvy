@@ -33,7 +33,6 @@ import 'package:auvy/core/utils/container_path_resolver.dart';
 /// How the library list is sorted.
 
 enum SortOption { dateAdded, name, songCount }
-final downloadProgressProvider = StateProvider<double>((ref) => 0.0);
 
 // State container for all library-related data and UI preferences.
 /// What an import actually did, so the UI never reports a count for an import
