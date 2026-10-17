@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:auvy/presentation/widgets/settings_kit.dart' show AuvyPageHeader;
 import 'package:auvy/providers/theme_provider.dart';
 import 'package:auvy/presentation/widgets/dynamic_background.dart';
 import 'package:auvy/presentation/widgets/auvy_image.dart';
@@ -30,10 +31,13 @@ class AboutPage extends ConsumerWidget {
     return DynamicBackground(
       child: Scaffold(
         backgroundColor: Colors.transparent,
-        body: CustomScrollView(
+        body: SafeArea(
+          bottom: false,
+          child: CustomScrollView(
           physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
           slivers: [
-            _buildHeaderBar(context),
+            // The title row the app's other pages use (see AuvyPageHeader).
+            const SliverToBoxAdapter(child: AuvyPageHeader(title: 'About')),
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -246,51 +250,9 @@ class AboutPage extends ConsumerWidget {
               ),
             ),
           ],
+          ),
         ),
       ),
-    );
-  }
-
-  // Collapsing large-title bar (same pattern as Settings).
-  Widget _buildHeaderBar(BuildContext context) {
-    return SliverAppBar(
-      pinned: true,
-      backgroundColor: Colors.transparent,
-      elevation: 0,
-      expandedHeight: 108,
-      leading: IconButton(
-        tooltip: 'Back',
-        icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
-        onPressed: () => Navigator.of(context).maybePop(),
-      ),
-      flexibleSpace: LayoutBuilder(builder: (context, constraints) {
-        final double topPad = MediaQuery.of(context).padding.top;
-        final double collapsedH = kToolbarHeight + topPad;
-        final double t =
-            ((constraints.maxHeight - collapsedH) / (108 - collapsedH)).clamp(0.0, 1.0);
-        return Stack(fit: StackFit.expand, children: [
-          Opacity(
-            opacity: 1.0 - t,
-            child: Container(color: Colors.black.withOpacity(0.55)),
-          ),
-          Padding(
-            padding: EdgeInsets.only(
-                left: 20 + (36 * (1 - t)), bottom: 14 + (2 * t), top: topPad),
-            child: Align(
-              alignment: Alignment.bottomLeft,
-              child: Text(
-                "About",
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 20 + (8 * t),
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: -0.5,
-                ),
-              ),
-            ),
-          ),
-        ]);
-      }),
     );
   }
 

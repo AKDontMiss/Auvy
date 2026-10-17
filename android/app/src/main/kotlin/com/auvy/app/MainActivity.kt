@@ -1249,6 +1249,10 @@ class MainActivity : AudioServiceActivity() {
         // run main(), which found no native_player channel, skipped runApp, and is
         // waiting for this ping. On a normal cold launch nothing is listening yet
         // and the message is simply dropped.
+        // Shortcuts, the Quick Settings tile, the widget, voice search and shared
+        // links all reach Dart through this. See AuvyCommands.
+        AuvyCommands.attach(applicationContext, flutterEngine.dartExecutor.binaryMessenger)
+
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             "auvy/engine_lifecycle",
@@ -1342,6 +1346,10 @@ class MainActivity : AudioServiceActivity() {
         if (intent?.getBooleanExtra(WhatsNewJobService.EXTRA_OPEN, false) == true) {
             pendingWhatsNewTap = true
         }
+        // A shortcut, a shared or opened link, or a voice search. Held natively
+        // until Dart is ready (see AuvyCommands).
+        AuvyCommands.handleIntent(intent)
+        AuvyCommands.publishShortcuts(applicationContext)
     }
 
     /**
@@ -1410,6 +1418,10 @@ class MainActivity : AudioServiceActivity() {
             pendingWhatsNewTap = true
             try { whatsNewChannel?.invokeMethod("openWhatsNew", null) } catch (_: Exception) {}
         }
+        // Shortcuts, shares and links while Auvy is already open. Not setIntent():
+        // launchedAlias reads the ORIGINAL intent to know which icon alias must
+        // stay enabled, and replacing it could disable the one this task runs from.
+        AuvyCommands.handleIntent(intent)
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {

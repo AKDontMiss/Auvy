@@ -10,6 +10,7 @@ import 'package:auvy/presentation/widgets/swipe_action_tile.dart';
 import 'package:auvy/data/dummy_data.dart';
 import 'package:auvy/core/app_navigation.dart';
 import 'package:auvy/providers/library_provider.dart';
+import 'package:auvy/core/app_colors.dart';
 import 'package:auvy/providers/theme_provider.dart'; 
 import 'package:auvy/presentation/pages/artist_page.dart'; 
 import 'package:auvy/services/haptic_service.dart';
@@ -613,14 +614,27 @@ class _LibraryPageState extends ConsumerState<LibraryPage> {
     final bool isKeyboardOpen = keyboardHeight > 0;
     final double bottomGap = isKeyboardOpen ? 20.0 : 150.0;
 
-    // Compute pinned/unpinned partitions ONCE per build instead of re-filtering
-    // in both itemCount and itemBuilder of each SliverReorderableList.
-    final pinnedItems = libState.filteredItems.where((i) => i.isPinned).toList();
-    final unpinnedItems = libState.filteredItems.where((i) => !i.isPinned).toList();
+    // One list per zone (pinned, the built-in folders, the user's own; see
+    // LibraryZone), computed ONCE per build instead of re-filtering in both
+    // itemCount and itemBuilder of each SliverReorderableList. filteredItems is
+    // already sorted by zone.
+    final zoned = {for (final z in LibraryZone.values) z: <LibraryItem>[]};
+    for (final i in libState.filteredItems) {
+      zoned[libraryZoneOf(i)]!.add(i);
+    }
+    final shownZones =
+        LibraryZone.values.where((z) => zoned[z]!.isNotEmpty).toList();
+    // The first run's header shares the row with the view toggle; each later
+    // run gets its own, in the list. While searching there are none: the
+    // results are one short list.
+    final firstZone = shownZones.isEmpty ? LibraryZone.recent : shownZones.first;
+    bool ownHeader(LibraryZone z) =>
+        !_isSearching && zoned[z]!.isNotEmpty && z != firstZone;
     // Position-free row keys — see [_libraryRowKeys]. Block mode derives its own
     // inside _gridSection, where the zone's items are what it is handed.
-    final pinnedKeys = _libraryRowKeys('pinned', pinnedItems);
-    final unpinnedKeys = _libraryRowKeys('unpinned', unpinnedItems);
+    final zoneKeys = {
+      for (final z in LibraryZone.values) z: _libraryRowKeys(z.name, zoned[z]!),
+    };
 
       return DynamicBackground(child: Scaffold(
     backgroundColor: Colors.transparent, 
@@ -665,12 +679,8 @@ class _LibraryPageState extends ConsumerState<LibraryPage> {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text("RECENTS",
-                      style: TextStyle(
-                          color: Colors.white.withOpacity(0.66),
-                          fontSize: 11,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: 1.4)),
+                  _zoneTitle(firstZone,
+                      sort: libState.sortOption, onSort: () => _showSortSheet(notifier)),
                   Semantics(
                     label: libState.isGrid ? 'Switch to list view' : 'Switch to block view',
                     button: true,
@@ -703,76 +713,56 @@ class _LibraryPageState extends ConsumerState<LibraryPage> {
             //
             // Grids can't swipe or use SliverReorderableList, so each tile gets a pin
             // button, and long-press-and-drag onto another tile reorders (built from
-            // LongPressDraggable + DragTarget). Reordering stays within the pinned or
-            // unpinned zone and reuses reorderLibraryItems(isPinned:), so a drag never
-            // changes a tile's pinned state.
+            // LongPressDraggable + DragTarget). Reordering stays within the tile's
+            // zone and reuses reorderLibraryItems(zone:), so a drag never changes a
+            // tile's pinned state or moves it under another header.
             ? CustomScrollView(
                 key: ValueKey('grid_${libState.selectedCategory}_$_isSearching'),
                 slivers: [
-                  if (pinnedItems.isNotEmpty) ...[
+                  for (final z in shownZones) ...[
+                    if (ownHeader(z))
+                      _zoneHeader(z,
+                          sort: libState.sortOption, onSort: () => _showSortSheet(notifier)),
                     _gridSection(
                       context: context,
                       ref: ref,
-                      items: pinnedItems,
+                      items: zoned[z]!,
                       suffix: suffix,
-                      isPinnedZone: true,
+                      zone: z,
                       notifier: notifier,
                       onTapItem: (it) => _handleItemTap(context, it, ref),
                     ),
                   ],
-                  _gridSection(
-                    context: context,
-                    ref: ref,
-                    items: unpinnedItems,
-                    suffix: suffix,
-                    isPinnedZone: false,
-                    onTapItem: (it) => _handleItemTap(context, it, ref),
-                    notifier: notifier,
-                  ),
                   SliverToBoxAdapter(child: SizedBox(height: bottomGap)),
                 ],
               )
             : CustomScrollView(
                 key: ValueKey('list_scroll_${libState.selectedCategory}_$_isSearching'),
                 slivers: [
-                  // Zone A: Pinned Items
-                  SliverReorderableList(
-                    onReorder: (oldIdx, newIdx) => notifier.reorderLibraryItems(isPinned: true, oldIndex: oldIdx, newIndex: newIdx),
-                    itemCount: pinnedItems.length,
-                    itemBuilder: (context, index) {
-                      final item = pinnedItems[index];
-                      return ReorderableDelayedDragStartListener(
-                        key: ValueKey(pinnedKeys[index]),
-                        index: index,
-                        child: _SwipeableLibraryTile(
-                          item: item,
-                          suffix: suffix,
-                          onTap: () => _handleItemTap(context, item, ref),
-                          onPin: () => notifier.togglePin(item),
-                          onDelete: (pos) => _showDeleteConfirmation(context, item, notifier, pos),
-                        ),
-                      );
-                    },
-                  ),
-                  // Zone B: Unpinned Items
-                  SliverReorderableList(
-                    onReorder: (oldIdx, newIdx) => notifier.reorderLibraryItems(isPinned: false, oldIndex: oldIdx, newIndex: newIdx),
-                    itemCount: unpinnedItems.length,
-                    itemBuilder: (context, index) {
-                      final item = unpinnedItems[index];
-                      return ReorderableDelayedDragStartListener(
-                        key: ValueKey(unpinnedKeys[index]),
-                        index: index,
-                        child: _SwipeableLibraryTile(
-                          item: item,
-                          suffix: suffix,
-                          onTap: () => _handleItemTap(context, item, ref),
-                          onPin: () => notifier.togglePin(item),
-                          onDelete: (pos) => _showDeleteConfirmation(context, item, notifier, pos),
-                        ),
-                      );
-                    },
-                  ),
+                  // One reorderable list per zone, each under its header.
+                  for (final z in LibraryZone.values) ...[
+                    if (ownHeader(z))
+                      _zoneHeader(z,
+                          sort: libState.sortOption, onSort: () => _showSortSheet(notifier)),
+                    SliverReorderableList(
+                      onReorder: (oldIdx, newIdx) => notifier.reorderLibraryItems(zone: z, oldIndex: oldIdx, newIndex: newIdx),
+                      itemCount: zoned[z]!.length,
+                      itemBuilder: (context, index) {
+                        final item = zoned[z]![index];
+                        return ReorderableDelayedDragStartListener(
+                          key: ValueKey(zoneKeys[z]![index]),
+                          index: index,
+                          child: _SwipeableLibraryTile(
+                            item: item,
+                            suffix: suffix,
+                            onTap: () => _handleItemTap(context, item, ref),
+                            onPin: () => notifier.togglePin(item),
+                            onDelete: (pos) => _showDeleteConfirmation(context, item, notifier, pos),
+                          ),
+                        );
+                      },
+                    ),
+                  ],
                   // Bottom gap sized to clear the nav bar and mini-player.
                   SliverToBoxAdapter(child: SizedBox(height: bottomGap)), 
                 ],
@@ -783,6 +773,81 @@ class _LibraryPageState extends ConsumerState<LibraryPage> {
     );
   }
 
+
+  /// Picks how the user's own playlists and albums are ordered. A plain list
+  /// of choices, the current one ticked; choosing applies it and closes.
+  void _showSortSheet(LibraryNotifier notifier) {
+    final accent = ref.read(themeProvider);
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      // Root navigator, so the barrier covers the mini player too (see
+      // showCoverPickerSheet).
+      useRootNavigator: true,
+      builder: (sheet) {
+        final current = ref.read(libraryProvider).sortOption;
+        return SafeArea(
+          top: false,
+          child: Container(
+            decoration: const BoxDecoration(
+              color: AppColors.modalPanel,
+              borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+            ),
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(height: 10),
+                Container(
+                  width: 38,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.white24,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(20, 16, 20, 4),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'Sort your playlists and albums',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 19,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -0.2,
+                      ),
+                    ),
+                  ),
+                ),
+                for (final (option, title, detail, icon) in _sortChoices)
+                  ListTile(
+                    leading: Icon(icon,
+                        color: option == current ? accent : Colors.white70),
+                    title: Text(title,
+                        style: TextStyle(
+                            color: option == current ? accent : Colors.white,
+                            fontWeight: FontWeight.w600)),
+                    subtitle: Text(detail,
+                        style: TextStyle(color: Colors.white.withOpacity(0.6))),
+                    trailing: option == current
+                        ? Icon(Icons.check_rounded, color: accent)
+                        : null,
+                    onTap: () {
+                      HapticService.selection();
+                      notifier.setSortOption(option);
+                      Navigator.pop(sheet);
+                    },
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
 
   Widget _buildSearchBar(LibraryNotifier notifier) {
     // Shared pill. See [AuvySearchField] for why a fixed-height Container plus a
@@ -1303,9 +1368,11 @@ class _FolderPage extends ConsumerWidget {
                   : imageUrl;
 
               // Charged hold. See HoldToOpen. Wrapping keeps the ListTile own
-              // onTap and ripple exactly as they were.
+              // onTap and ripple exactly as they were; that ripple is the hold
+              // animation, so HoldToOpen draws none of its own.
               return HoldToOpen(
                 borderRadius: BorderRadius.circular(10),
+                ripple: false,
                 onHold: item is Song
                     ? () => ContentMenus.showSongMenu(context, item, ref)
                     : null,
@@ -1561,6 +1628,88 @@ class _FilterChip extends StatelessWidget {
       AuvyPill(label: label, selected: isSelected, onTap: onTap);
 }
 
+/// The header over one run of the library. See [LibraryZone] for what each
+/// holds; the names say it plainly rather than one "RECENTS" over all three.
+/// The user's own run is named by how it is sorted (see [SortOption]).
+String _zoneLabel(LibraryZone z, SortOption sort) => switch (z) {
+      LibraryZone.pinned => 'PINNED',
+      LibraryZone.folders => 'FOLDERS',
+      LibraryZone.recent => _sortLabel(sort),
+    };
+
+String _sortLabel(SortOption sort) => switch (sort) {
+      SortOption.dateAdded => 'RECENTLY ADDED',
+      SortOption.recentlyPlayed => 'RECENTLY PLAYED',
+      SortOption.name => 'A TO Z',
+      SortOption.songCount => 'MOST SONGS',
+      SortOption.custom => 'YOUR ORDER',
+    };
+
+TextStyle get _zoneStyle => TextStyle(
+    color: Colors.white.withOpacity(0.66),
+    fontSize: 11,
+    fontWeight: FontWeight.w800,
+    letterSpacing: 1.4);
+
+/// A run's header. The user's own run's header is also its sort control: the
+/// label says the order, the arrows say it can change.
+Widget _zoneTitle(LibraryZone z, {required SortOption sort, VoidCallback? onSort}) {
+  final label = Text(_zoneLabel(z, sort), style: _zoneStyle);
+  if (z != LibraryZone.recent || onSort == null) {
+    return Semantics(header: true, child: label);
+  }
+  return Semantics(
+    header: true,
+    button: true,
+    label: 'Sorted by ${_zoneLabel(z, sort).toLowerCase()}. Change the order',
+    excludeSemantics: true,
+    child: GestureDetector(
+      onTap: () {
+        HapticService.selection();
+        onSort();
+      },
+      behavior: HitTestBehavior.opaque,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            label,
+            const SizedBox(width: 4),
+            Icon(Icons.swap_vert_rounded,
+                size: 14, color: Colors.white.withOpacity(0.66)),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+/// A later run's header, in the list itself. Lined up with the first one,
+/// which sits in the row above the list next to the view toggle.
+Widget _zoneHeader(LibraryZone z, {required SortOption sort, VoidCallback? onSort}) =>
+    SliverToBoxAdapter(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(18, 14, 16, 8),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: _zoneTitle(z, sort: sort, onSort: onSort),
+        ),
+      ),
+    );
+
+/// The orders the user's own playlists and albums can take, as the sort sheet
+/// offers them. See [SortOption].
+const List<(SortOption, String, String, IconData)> _sortChoices = [
+  (SortOption.dateAdded, 'Recently added', 'Newest first', Icons.schedule_rounded),
+  (SortOption.recentlyPlayed, 'Recently played', 'What you played lately comes first',
+      Icons.history_rounded),
+  (SortOption.name, 'A to Z', 'By name', Icons.sort_by_alpha_rounded),
+  (SortOption.songCount, 'Most songs', 'Biggest first', Icons.queue_music_rounded),
+  (SortOption.custom, 'Your order', 'As you arrange them: hold a row and drag it',
+      Icons.drag_indicator_rounded),
+];
+
 /// Per-row widget keys for one zone of the library, in list or block mode.
 ///
 /// Keys must not include the row's position: if they did, every row shifted
@@ -1581,14 +1730,14 @@ List<String> _libraryRowKeys(String zone, List<LibraryItem> items) {
   return keys;
 }
 
-/// One zone of the block-mode grid (pinned or unpinned), with long-press drag
+/// One zone of the block-mode grid (see [LibraryZone]), with long-press drag
 /// reordering and a per-tile pin button. See the note at the call site.
 Widget _gridSection({
   required BuildContext context,
   required WidgetRef ref,
   required List<LibraryItem> items,
   required String suffix,
-  required bool isPinnedZone,
+  required LibraryZone zone,
   required dynamic notifier,
   // Passed in rather than called directly: _handleItemTap is a State method and
   // this builder is top-level, so the tap has to arrive as a callback.
@@ -1597,7 +1746,7 @@ Widget _gridSection({
   // Tiles are keyed by identity, and the reverse map lets the sliver find a
   // tile by key, so a reorder moves tiles instead of rebuilding every tile
   // after the drop point (and re-running their cover lookups).
-  final keys = _libraryRowKeys(isPinnedZone ? 'pinned' : 'unpinned', items);
+  final keys = _libraryRowKeys(zone.name, items);
   final slotOfKey = <String, int>{
     for (var i = 0; i < keys.length; i++) keys[i]: i,
   };
@@ -1639,7 +1788,7 @@ Widget _gridSection({
             onAcceptWithDetails: (d) {
               HapticService.light();
               notifier.reorderLibraryItems(
-                isPinned: isPinnedZone,
+                zone: zone,
                 oldIndex: d.data,
                 // SliverReorderableList's contract: a forward move lands one
                 // past the target, because the dragged item is removed first.

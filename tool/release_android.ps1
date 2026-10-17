@@ -103,6 +103,12 @@ try {
         Copy-Item $kp $kpCopy
     }
 
+    # metadata_god's bundled build script (cargokit, run_build_tool.cmd) writes into
+    # .dart_tool before anything has created it, which in a fresh checkout prints
+    # "The system cannot find the path/file specified." four times and then builds
+    # fine. Created here so a clean build reads clean.
+    New-Item -ItemType Directory -Force -Path (Join-Path $WorkDir 'build\metadata_god\build\build_tool\.dart_tool') | Out-Null
+
     Push-Location $WorkDir
     try {
         & (Join-Path $WorkDir 'tool\build_release.ps1')

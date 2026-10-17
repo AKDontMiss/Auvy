@@ -115,6 +115,20 @@
                 android:resource="@xml/widget_player_info" />
         </receiver>
         
+        <!-- "Your Mixes" widget. Its taps go to WidgetActionReceiver or open the app,
+             like the player widget's (see the note on that receiver). -->
+        <receiver
+            android:name=".MixesWidgetProvider"
+            android:label="Your Mixes"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_mixes_info" />
+        </receiver>
+
         <!-- Audio capture for song recognition. Not exported: only Auvy starts it. -->
         <!-- Two types because it captures two ways: `microphone` for the tile and
              `mediaProjection` for the in-app this-device capture. The type passed to
@@ -148,6 +162,22 @@
             <intent-filter>
                 <action android:name="android.service.quicksettings.action.QS_TILE" />
             </intent-filter>
+        </service>
+
+        <!-- Quick-settings play/pause tile, the counterpart of the iPhone's Control
+             Center button. See PlaybackTileService. -->
+        <service
+            android:name=".PlaybackTileService"
+            android:label="Auvy"
+            android:icon="@drawable/ic_tile_play"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.quicksettings.ACTIVE_TILE"
+                android:value="false" />
         </service>
 
         <!-- Plays the wake-up alarm itself, so the music doesn't wait for anyone to tap
@@ -206,6 +236,38 @@
             <!-- No launcher intent-filter here, deliberately. MainActivity is the
                  targetActivity of every icon alias below, so it must always stay enabled;
                  the default icon is the `.MainActivityDefault` alias instead. -->
+
+            <!-- "Share → Auvy" from Spotify, Apple Music, YouTube or anywhere a
+                 link can be shared. The text is read by AuvyCommands; anything
+                 that isn't a music link gets a short "not a music link" note. -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+
+            <!-- Music links can be opened in Auvy. Not verified app links (that
+                 needs the sites' cooperation), so Android only offers Auvy where
+                 the user allows it ("Open by default"). General youtube.com and
+                 youtu.be video links are left out on purpose: those are mostly
+                 not music, and Auvy shouldn't put itself in front of them. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" />
+                <data android:host="open.spotify.com" />
+                <data android:host="spotify.link" />
+                <data android:host="music.apple.com" />
+                <data android:host="music.youtube.com" />
+            </intent-filter>
+
+            <!-- Voice search: "play … on Auvy", for whichever assistant supports
+                 Android's standard play-from-search. -->
+            <intent-filter>
+                <action android:name="android.media.action.MEDIA_PLAY_FROM_SEARCH" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
         </activity>
 
         <!-- LAUNCHER ICONS (Settings → Appearance → App icon)

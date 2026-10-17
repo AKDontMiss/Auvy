@@ -10,6 +10,7 @@ import 'package:flutter/services.dart';
 import 'package:auvy/services/search_service.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:auvy/presentation/widgets/custom_sliders.dart';
+import 'package:auvy/presentation/widgets/visible_clock_hold.dart';
 import 'package:auvy/presentation/widgets/hydrv_transitions.dart';
 import 'package:auvy/providers/conform_provider.dart';
 import 'package:auvy/logic/media_kind.dart';
@@ -53,6 +54,7 @@ import 'package:auvy/presentation/widgets/ab_looper_sheet.dart';
 import 'package:auvy/providers/density_provider.dart';
 import 'package:auvy/services/radio_schedule_service.dart';
 import 'package:auvy/providers/radio_provider.dart';
+import 'package:auvy/logic/audio_level_meter.dart';
 
 /// How far left of the screen's centre the top bar's context badge sits. The
 /// badge is an Expanded between a leading chevron and the trailing icons, so it
@@ -155,9 +157,42 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with TickerProviderStat
   // "opening the player sometimes lags".
   bool _routeSettled = false;
 
+  /// Whether this page is holding the level meter that drives the cover's glow.
+  bool _meterHeld = false;
+
+  /// False while another page covers this one.
+  bool _shown = true;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final shown = TickerMode.valuesOf(context).enabled;
+    if (shown != _shown) {
+      _shown = shown;
+      _syncMeter(ref.read(artworkGlowModeProvider));
+    }
+  }
+
+  /// The glow follows the music in "With the music" and "Bright"; only then is
+  /// the music measured (see AudioLevelMeter).
+  void _syncMeter(String glowMode) {
+    final follows = glowMode == 'reactive' || glowMode == 'vibrant';
+    // Not while another page covers this one (see VisibleClockHold).
+    final want = follows && _shown;
+    if (want == _meterHeld) return;
+    _meterHeld = want;
+    if (want) {
+      AudioLevelMeter.instance.acquire();
+    } else {
+      AudioLevelMeter.instance.release();
+    }
+  }
+
   @override
   void initState() {
     super.initState();
+    ref.listenManual<String>(artworkGlowModeProvider, (_, mode) => _syncMeter(mode),
+        fireImmediately: true);
     // Mark the player as open so neither the mini-player nor the media
     // notification can push a second, stacked PlayerPage on top of this one.
     AppNavigation.markPlayerOpened();
@@ -342,6 +377,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with TickerProviderStat
 
   @override
   void dispose() {
+    if (_meterHeld) {
+      _meterHeld = false;
+      AudioLevelMeter.instance.release();
+    }
     AppNavigation.markPlayerClosed();
     _flipController.dispose();
     _slideRecenterController.dispose();
@@ -1725,9 +1764,12 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with TickerProviderStat
                   alignment: Alignment.center,
                   children: [
                     Positioned.fill(
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 150),
-                        curve: Curves.easeOut,
+                      // Not an AnimatedContainer: the level changes every 50 ms,
+                      // so a tween longer than that restarts before it ends and
+                      // never stops, drawing at the display rate (120 a second)
+                      // with a large blur in every frame. AudioLevelMeter already
+                      // smooths the level, so this draws once per reading.
+                      child: DecoratedBox(
                         decoration: BoxDecoration(
                           borderRadius: BorderRadius.circular(ListeningPolicy.playerArtworkRadius),
                           boxShadow: [
@@ -2878,6 +2920,8 @@ class _FeedbackIcon extends StatelessWidget { final IconData icon; final String 
 ///     ScrollController dirtied layout every frame.)
 ///   * **Stop when the music stops.** Only animates while playing and when the
 ///     title actually overflows, so a paused player renders nothing.
+///   * **Rest at the ends.** Slides at reading speed and rests 2.5 s at each
+///     end, stepping on a timer (see [_MarqueeTextState]).
 class MarqueeText extends ConsumerStatefulWidget {
   final String text;
   final TextStyle style;
@@ -2887,16 +2931,48 @@ class MarqueeText extends ConsumerStatefulWidget {
 }
 
 class _MarqueeTextState extends ConsumerState<MarqueeText>
-    with SingleTickerProviderStateMixin {
-  /// Created in initState, not lazily: a lazy `late final` controller for a title that
-  /// fits would first be created in dispose(), when the element is already defunct.
-  /// An idle controller costs nothing; [_sync] decides whether it runs.
-  late final AnimationController _ac;
+    with WidgetsBindingObserver {
+  /// Where the slide is: 0 at the start of the title, 1 at its end. Painted
+  /// through a listenable, so a step moves the cached text layer and nothing
+  /// else rebuilds.
+  final ValueNotifier<double> _pos = ValueNotifier<double>(0);
+
+  /// Slides at reading speed, rests at each end, and steps on a timer rather
+  /// than every vsync.
+  ///
+  /// A vsync animation draws at the display rate (120 a second on these
+  /// screens), and on Android each frame renders the whole player page, cover
+  /// glow included: a long title kept a phone at a full core for as long as
+  /// it played. Moving at [_pxPerSecond] in [_tick] steps caps that at 30 a
+  /// second (1.3 px a step, the rate the moving seek bars use; 60 still came
+  /// to ~35 frames a second on average with a long episode title), and
+  /// resting [_restFor] at each end draws nothing at all (it also leaves a new
+  /// title readable before it moves). Stops when the app isn't in front.
+  static const Duration _tick = Duration(milliseconds: 33);
+  static const double _pxPerSecond = 40;
+  static const Duration _restFor = Duration(milliseconds: 2500);
+
+  Timer? _step;
+  Timer? _rest;
+  int _dir = 1;
+  bool _foreground = true;
+  /// False while the player page is covered by another page (see
+  /// VisibleClockHold).
+  bool _visible = true;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _visible = TickerMode.valuesOf(context).enabled;
+    _sync();
+  }
 
   @override
   void initState() {
     super.initState();
-    _ac = AnimationController(vsync: this, duration: const Duration(seconds: 10));
+    WidgetsBinding.instance.addObserver(this);
+    final s = WidgetsBinding.instance.lifecycleState;
+    _foreground = s == null || s == AppLifecycleState.resumed;
   }
 
   /// How far the text exceeds its box, in logical pixels. 0 means it fits.
@@ -2905,21 +2981,52 @@ class _MarqueeTextState extends ConsumerState<MarqueeText>
   /// Last playing state acted on, so [_sync] is not re-run on every rebuild.
   bool _playing = false;
 
-  /// Start or stop the slide.
-  ///
-  /// Deliberately idempotent and safe to call from anywhere: it compares
-  /// against `_ac.isAnimating` rather than tracking state of its own, which is
-  /// what stops a rebuild storm from stacking up tickers.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _foreground = state == AppLifecycleState.resumed;
+    _sync();
+  }
+
+  /// Start or stop the slide. Idempotent: a rebuild storm can't stack timers.
   void _sync() {
-    final bool shouldRun = _playing && _overflow > 0.5;
-    if (shouldRun && !_ac.isAnimating) {
-      _ac.repeat(reverse: true);
-    } else if (!shouldRun && _ac.isAnimating) {
+    final bool shouldRun = _playing && _overflow > 0.5 && _foreground && _visible;
+    if (!shouldRun) {
       // Parks where it is rather than snapping home: a title that jumped back
       // to the start on pause would read as a glitch, and the position it
       // stopped at is the one the listener was reading.
-      _ac.stop();
+      _step?.cancel();
+      _step = null;
+      _rest?.cancel();
+      _rest = null;
+      return;
     }
+    if (_step != null || _rest != null) return; // already going
+    _restThenSlide();
+  }
+
+  void _restThenSlide() {
+    _rest = Timer(_restFor, () {
+      _rest = null;
+      if (mounted) _slide();
+    });
+  }
+
+  void _slide() {
+    if (_overflow <= 0.5) return;
+    _step = Timer.periodic(_tick, (t) {
+      // Per step, so a layout change mid-slide keeps the same speed.
+      final perStep = _pxPerSecond * _tick.inMilliseconds / 1000 / _overflow;
+      final v = _pos.value + _dir * perStep;
+      if (v >= 1 || v <= 0) {
+        _pos.value = v.clamp(0.0, 1.0);
+        t.cancel();
+        _step = null;
+        _dir = -_dir;
+        _restThenSlide();
+        return;
+      }
+      _pos.value = v;
+    });
   }
 
   @override
@@ -2927,15 +3034,22 @@ class _MarqueeTextState extends ConsumerState<MarqueeText>
     super.didUpdateWidget(oldWidget);
     if (oldWidget.text != widget.text) {
       // A new track: back to the start, and re-measure on the coming build.
-      _ac.stop();
-      _ac.value = 0;
+      _step?.cancel();
+      _step = null;
+      _rest?.cancel();
+      _rest = null;
+      _pos.value = 0;
+      _dir = 1;
       _overflow = 0;
     }
   }
 
   @override
   void dispose() {
-    _ac.dispose();
+    WidgetsBinding.instance.removeObserver(this);
+    _step?.cancel();
+    _rest?.cancel();
+    _pos.dispose();
     super.dispose();
   }
 
@@ -2958,8 +3072,8 @@ class _MarqueeTextState extends ConsumerState<MarqueeText>
       final double overflow =
           (tp.width - constraints.maxWidth).clamp(0.0, double.infinity);
 
-      // State the ticker depends on changed → reconcile after this frame.
-      // Deferred because starting a controller during build is illegal.
+      // State the slide depends on changed → reconcile after this frame, so
+      // a build never starts or stops timers itself.
       if (overflow != _overflow || playing != _playing) {
         _overflow = overflow;
         _playing = playing;
@@ -2968,7 +3082,7 @@ class _MarqueeTextState extends ConsumerState<MarqueeText>
         });
       }
 
-      // Fits: a plain Text, no clip, no transform, no ticker. The common case
+      // Fits: a plain Text, no clip, no transform, no timer. The common case
       // for most titles, and it must stay free.
       if (overflow <= 0.5) {
         return Text(widget.text,
@@ -2984,17 +3098,17 @@ class _MarqueeTextState extends ConsumerState<MarqueeText>
             // instead of overflowing, leaving nothing to slide.
             maxWidth: double.infinity,
             alignment: Alignment.centerLeft,
-            child: AnimatedBuilder(
-              animation: _ac,
+            child: ValueListenableBuilder<double>(
+              valueListenable: _pos,
               // `child` is passed in, so the Text is built ONCE and only the
-              // Transform is rebuilt per frame — and the RepaintBoundary keeps
-              // it a cached layer, so a frame costs a matrix, not a raster.
+              // Transform is rebuilt per step, and the RepaintBoundary keeps
+              // it a cached layer.
               child: RepaintBoundary(
                 child: Text(widget.text,
                     style: widget.style, maxLines: 1, softWrap: false),
               ),
-              builder: (context, child) => Transform.translate(
-                offset: Offset(-overflow * _ac.value, 0),
+              builder: (context, v, child) => Transform.translate(
+                offset: Offset(-overflow * v, 0),
                 // The text is wider than the clip in every position, so hit
                 // testing does not need to follow the slide — and leaving it
                 // untransformed keeps the title's tap target (album) still.
@@ -3749,26 +3863,28 @@ class _LiveSessionDot extends StatefulWidget {
 }
 
 class _LiveSessionDotState extends State<_LiveSessionDot>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _c = AnimationController(
-      vsync: this, duration: const Duration(milliseconds: 1200))
-    ..repeat(reverse: true);
+    with VisibleClockHold {
+  @override
+  void acquireClock() => _PulseClock.instance.acquire();
+  @override
+  void releaseClock() => _PulseClock.instance.release();
 
   @override
-  void dispose() {
-    _c.dispose();
-    super.dispose();
+  void initState() {
+    super.initState();
+    wantClock(true);
   }
 
   @override
   Widget build(BuildContext context) {
     // FadeTransition inside a RepaintBoundary, so the pulse runs on the
     // compositor (layer opacity) and repaints nothing. Animating the boxShadow
-    // blur instead would repaint the whole player page every frame.
+    // blur instead would repaint the whole player page every frame. Stepped by
+    // the shared pulse clock, not a ticker (see _PulseClock).
     return RepaintBoundary(
-      child: FadeTransition(
-        opacity:
-            Tween(begin: 0.45, end: 1.0).chain(CurveTween(curve: Curves.easeInOut)).animate(_c),
+      child: ValueListenableBuilder<double>(
+        valueListenable: _PulseClock.instance.opacity,
+        builder: (context, v, child) => Opacity(opacity: v, child: child),
         child: Container(
           width: 8,
           height: 8,
@@ -3790,24 +3906,24 @@ class _LiveSessionDotState extends State<_LiveSessionDot>
 }
 
 class _LivePulseDotState extends State<_LivePulseDot>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _c =
-      AnimationController(vsync: this, duration: const Duration(milliseconds: 1200))
-        ..repeat(reverse: true);
+    with VisibleClockHold {
+  @override
+  void acquireClock() => _PulseClock.instance.acquire();
+  @override
+  void releaseClock() => _PulseClock.instance.release();
 
   @override
-  void dispose() {
-    _c.dispose();
-    super.dispose();
+  void initState() {
+    super.initState();
+    wantClock(true);
   }
 
   @override
   Widget build(BuildContext context) {
     return RepaintBoundary(
-      child: FadeTransition(
-        opacity: Tween(begin: 0.45, end: 1.0)
-            .chain(CurveTween(curve: Curves.easeInOut))
-            .animate(_c),
+      child: ValueListenableBuilder<double>(
+        valueListenable: _PulseClock.instance.opacity,
+        builder: (context, v, child) => Opacity(opacity: v, child: child),
         child: Container(
           width: 9,
           height: 9,
@@ -3827,6 +3943,77 @@ class _LivePulseDotState extends State<_LivePulseDot>
     );
   }
 }
+/// The clock behind the live dots (Listen Together's and live radio's): the
+/// same 1.2 s ease-in-out pulse between 45% and 100%, stepped every 80 ms on a
+/// timer instead of on every screen refresh.
+///
+/// As a repeating AnimationController each dot asked for a frame on every
+/// vsync for as long as the session or station lasted, ~120 a second, and on
+/// Android every frame redraws the whole player page (blurred lyric lines
+/// included): measured 2026-10-17, the Galaxy at 107-115% of a core and ~118
+/// frames a second as a Listen Together guest, the iPhone host at ~121. A
+/// dot this small looks the same at 12.5 steps a second. Shared, so two dots
+/// step together, and stopped while the app isn't in the foreground.
+class _PulseClock with WidgetsBindingObserver {
+  _PulseClock._();
+  static final _PulseClock instance = _PulseClock._();
+
+  static const Duration _step = Duration(milliseconds: 80);
+  static const int _stepsPerHalf = 8; // 8 × 80 ms ≈ the old 600 ms half cycle
+
+  final ValueNotifier<double> opacity = ValueNotifier<double>(1.0);
+  Timer? _timer;
+  int _tick = 0;
+  int _users = 0;
+  bool _observing = false;
+  bool _foreground = true;
+
+  void acquire() {
+    _users++;
+    if (!_observing) {
+      _observing = true;
+      WidgetsBinding.instance.addObserver(this);
+      final s = WidgetsBinding.instance.lifecycleState;
+      _foreground = s == null || s == AppLifecycleState.resumed;
+    }
+    _sync();
+  }
+
+  void release() {
+    if (_users > 0) _users--;
+    _sync();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _foreground = state == AppLifecycleState.resumed;
+    _sync();
+  }
+
+  void _sync() {
+    final want = _users > 0 && _foreground;
+    if (want && _timer == null) {
+      _timer = Timer.periodic(_step, (_) {
+        _tick++;
+        const span = _stepsPerHalf * 2;
+        final p = _tick % span;
+        final t = (p < _stepsPerHalf ? p : span - p) / _stepsPerHalf;
+        opacity.value = 0.45 + 0.55 * Curves.easeInOut.transform(t);
+      });
+    } else if (!want && _timer != null) {
+      _timer!.cancel();
+      _timer = null;
+    }
+  }
+
+  @visibleForTesting
+  static bool get running => instance._timer != null;
+}
+
+/// Test access to the live dots' shared clock.
+@visibleForTesting
+bool get livePulseClockRunning => _PulseClock.running;
+
 /// The quiet "you can swipe this" hint above the artwork: legible but not a button
 /// (a 16 px chevron at 55% white with the word LYRICS, no background, since tapping
 /// does nothing). Fades out once lyrics are showing.

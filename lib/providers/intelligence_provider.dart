@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:auvy/data/dummy_data.dart';
 import 'package:auvy/services/cloud_sync_service.dart';
 import 'package:auvy/services/play_tally.dart';
+import 'package:auvy/services/play_devices.dart';
 import 'package:auvy/services/set_log.dart';
 // Genre tags for the scorer. See [IntelligenceState.artistGenres].
 import 'package:auvy/services/artist_metadata_service.dart';
@@ -1494,6 +1495,9 @@ class IntelligenceNotifier extends StateNotifier<IntelligenceState> {
     // summing it across devices would double-count exchanged plays; per-device
     // tallies don't overlap, so their sum stays exact. See PlayTally.
     PlayTally.instance.increment(song.id);
+    // And which device this play was on, for the history page (by the same
+    // stamp the ledger gets below). See PlayDevices.
+    PlayDevices.instance.recordOwn(song.id, now);
 
     // Write the timestamp ledger here, at the same moment and by the same rule as
     // the count, so time-based views (listening clock, active days, streaks, recap
@@ -1593,6 +1597,16 @@ class IntelligenceNotifier extends StateNotifier<IntelligenceState> {
   /// listening history. Limited to counts, metadata and first-play dates; it
   /// doesn't touch momentum, transitions or day-part data, which describe when and
   /// in what order this user listened.
+  /// A "Refresh details" result, into the copy of the track the taste data keeps
+  /// (Quick Picks, the home shelves and My Top 50 read it). Only a track already
+  /// known is touched; one never played has nothing here to correct.
+  void applyRefreshedMetadata(Song fresh) {
+    if (fresh.id.isEmpty || !state.trackMetadata.containsKey(fresh.id)) return;
+    final meta = Map<String, Song>.from(state.trackMetadata)..[fresh.id] = fresh;
+    state = state.copyWith(trackMetadata: meta);
+    _saveStateDebounced();
+  }
+
   void mergeImportedPlayCounts(
     Map<String, int> counts,
     Map<String, Song> metadata, {

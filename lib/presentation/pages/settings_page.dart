@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:auvy/presentation/widgets/links_from_other_apps_sheet.dart';
 import 'package:auvy/presentation/widgets/auvy_pill.dart';
 import 'package:auvy/presentation/widgets/dynamic_background.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -79,6 +80,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         'loudness normalisation',
     'Intelligence': 'recommendations taste discovery bias smart mix',
     'Listening data': 'history privacy pause scrobble last.fm lastfm',
+    'Other apps': 'links link spotify apple music youtube share sheet copy paste shortcuts siri open',
     'Data & Storage': 'cache size downloads storage offline data saver',
     'Account': 'sign out login backup sync cloud delete account profile',
     'About': 'version licence license build info',
@@ -113,10 +115,13 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         // expose the bare backdrop as a slab over the list. The scroll view
         // already handles a shortened viewport by scrolling.
         resizeToAvoidBottomInset: false,
-        body: CustomScrollView(
+        body: SafeArea(
+          bottom: false,
+          child: CustomScrollView(
           physics: const BouncingScrollPhysics(),
           slivers: [
-            _buildHeaderBar(context),
+            // The title row the app's other pages use (see AuvyPageHeader).
+            const SliverToBoxAdapter(child: AuvyPageHeader(title: 'Settings')),
 
             // Filter
             // Settings is nine sections long; finding one setting meant
@@ -221,6 +226,19 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             // "Wake up" lives in Library → Tools, next to where you'd reach for it at
             // bedtime; a second copy here would mean two screens editing the same settings.
 
+            // Getting music into Auvy from other apps: links (share, copy, Shortcuts).
+            _section("Other apps", [
+              _NavRow(
+                icon: Icons.link_rounded,
+                tint: const Color(0xFF81D4FA),
+                title: "Open links from other apps",
+                subtitle: Platform.isIOS
+                    ? "Spotify, Apple Music and YouTube links: copy, share or paste"
+                    : "Share Spotify, Apple Music and YouTube links to Auvy",
+                onTap: () => showLinksFromOtherAppsSheet(context),
+              ),
+            ]),
+
             // Data & Storage and Account open their own screens, with a compact summary here,
             // so the main list stays short. The blocks themselves are unchanged, just one
             // level deeper.
@@ -302,52 +320,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             // Bottom padding for the mini-player.
             const SliverToBoxAdapter(child: SizedBox(height: 130)),
           ],
+          ),
         ),
       ),
-    );
-  }
-
-  Widget _buildHeaderBar(BuildContext context) {
-    return SliverAppBar(
-      pinned: true,
-      backgroundColor: Colors.transparent,
-      elevation: 0,
-      expandedHeight: 108,
-      leading: IconButton(
-        tooltip: 'Back',
-        icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
-        onPressed: () => Navigator.of(context).maybePop(),
-      ),
-      flexibleSpace: LayoutBuilder(builder: (context, constraints) {
-        final double topPad = MediaQuery.of(context).padding.top;
-        final double collapsedH = kToolbarHeight + topPad;
-        final double t =
-            ((constraints.maxHeight - collapsedH) / (108 - collapsedH)).clamp(0.0, 1.0);
-        return Stack(fit: StackFit.expand, children: [
-          // Scrim so the pinned bar stays readable once content scrolls under.
-          Opacity(
-            opacity: 1.0 - t,
-            child: Container(color: Colors.black.withOpacity(0.55)),
-          ),
-          // Large title that settles into the toolbar as you scroll.
-          Padding(
-            padding: EdgeInsets.only(
-                left: 20 + (36 * (1 - t)), bottom: 14 + (2 * t), top: topPad),
-            child: Align(
-              alignment: Alignment.bottomLeft,
-              child: Text(
-                "Settings",
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 20 + (8 * t),
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: -0.5,
-                ),
-              ),
-            ),
-          ),
-        ]);
-      }),
     );
   }
 
@@ -559,6 +534,8 @@ class _PlaybackToggles extends ConsumerWidget {
       ),
       const _SectionDivider(),
       const _ExternalPlayRow(),
+      const _SectionDivider(),
+      const _EarbudBounceRow(),
     ]);  // Lyric size, centring, romanisation and share-line count MOVED to
       // Appearance. They are all about how lyrics LOOK and read, which is the
       // same kind of decision as the accent colour and the slider style — and
@@ -903,6 +880,34 @@ class _ExternalPlayRowState extends ConsumerState<_ExternalPlayRow> {
       value: ListeningPolicy.allowExternalPlayStart,
       onChanged: (v) async {
         await ListeningPolicy.setAllowExternalPlayStart(v);
+        if (mounted) setState(() {});
+      },
+    );
+  }
+}
+
+/// Ignores the play some earbuds send by themselves a few seconds after a pause
+/// (Galaxy Buds going into the case or back in). Backed by
+/// [ListeningPolicy.ignoreEarbudBounce]; see AuvyAudioHandler.isEarbudBounce.
+class _EarbudBounceRow extends ConsumerStatefulWidget {
+  const _EarbudBounceRow();
+  @override
+  ConsumerState<_EarbudBounceRow> createState() => _EarbudBounceRowState();
+}
+
+class _EarbudBounceRowState extends ConsumerState<_EarbudBounceRow> {
+  @override
+  Widget build(BuildContext context) {
+    return _ToggleRow(
+      icon: Icons.earbuds_rounded,
+      tint: const Color(0xFF80DEEA),
+      title: "Ignore earbud play after a pause",
+      subtitle: "Some earbuds start music by themselves a few seconds after "
+          "pausing, when one goes into its case. Off if you re-tap an earbud "
+          "to resume straight after it paused",
+      value: ListeningPolicy.ignoreEarbudBounce,
+      onChanged: (v) async {
+        await ListeningPolicy.setIgnoreEarbudBounce(v);
         if (mounted) setState(() {});
       },
     );
@@ -3402,12 +3407,25 @@ class _SigningReminderRow extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final s = ref.watch(signingReminderProvider);
     final expiresAt = s.expiresAt;
-    if (!Platform.isIOS || expiresAt == null) return const SizedBox.shrink();
+    if (!Platform.isIOS || (expiresAt == null && !s.renewedUnseen)) {
+      return const SizedBox.shrink();
+    }
     final loc = MaterialLocalizations.of(context);
-    final until = '${loc.formatMediumDate(expiresAt)}, ${loc.formatTimeOfDay(
-        TimeOfDay.fromDateTime(expiresAt),
-        alwaysUse24HourFormat: MediaQuery.alwaysUse24HourFormatOf(context))}';
-    final left = formatSigningLeft(expiresAt.difference(DateTime.now()));
+    final notifier = ref.read(signingReminderProvider.notifier);
+    // SideStore's refresh can't be seen from inside Auvy (it installs a new
+    // profile into iOS, not into the app), so the date shown is the one Auvy
+    // knows: from install, or from the last confirmed refresh.
+    final String signed;
+    if (expiresAt == null) {
+      signed = "SideStore renewed Auvy, but the new date can't be seen from here. "
+          "Tap \"I've refreshed\" after your next refresh.";
+    } else {
+      final until = '${loc.formatMediumDate(expiresAt)}, ${loc.formatTimeOfDay(
+          TimeOfDay.fromDateTime(expiresAt),
+          alwaysUse24HourFormat: MediaQuery.alwaysUse24HourFormatOf(context))}';
+      final left = formatSigningLeft(expiresAt.difference(DateTime.now()));
+      signed = 'Signed until $until ($left left).';
+    }
     // On, but iOS won't show notifications: say where to fix it.
     final blocked = s.enabled == true && s.permission == 'denied';
     return Column(
@@ -3417,17 +3435,31 @@ class _SigningReminderRow extends ConsumerWidget {
           icon: Icons.verified_user_outlined,
           tint: const Color(0xFFA5D6A7),
           title: "Refresh reminders",
-          subtitle: "Signed until $until ($left left). "
+          subtitle: "$signed "
               "${blocked ? "Notifications are off for Auvy in iOS Settings; tap to open them." : s.enabled == true ? "Reminds you 2 days, 1 day and 3 hours before." : "Turn on to be reminded before it runs out."}",
           value: s.enabled == true && !blocked,
           onChanged: (v) async {
-            final notifier = ref.read(signingReminderProvider.notifier);
             if (blocked) {
               await notifier.openSettings();
             } else if (v) {
               await notifier.enable();
             } else {
               await notifier.disable();
+            }
+          },
+        ),
+        const _SectionDivider(),
+        SettingsActionRow(
+          icon: Icons.refresh_rounded,
+          tint: const Color(0xFFA5D6A7),
+          title: "I've refreshed in SideStore",
+          subtitle: 'Tap after a refresh so the date and reminders follow it',
+          onTap: () async {
+            HapticService.selection();
+            await notifier.markRefreshed();
+            final at = ref.read(signingReminderProvider).expiresAt;
+            if (at != null) {
+              AnimatedToast.message('Got it: signed until ${loc.formatMediumDate(at)}');
             }
           },
         ),

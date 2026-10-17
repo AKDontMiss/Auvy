@@ -1513,7 +1513,6 @@ class _MosaicTile extends ConsumerWidget {
     return HoldToOpen(
       borderRadius:
           BorderRadius.circular(ListeningPolicy.roundArtwork(10)),
-      color: ref.watch(themeProvider),
       // Only single-song tiles get the track menu; album/playlist tiles
       // open/resume the collection instead, so they arm nothing.
       onHold: entry.isSong
@@ -1616,7 +1615,6 @@ class _HomeSongTile extends ConsumerWidget {
       margin: const EdgeInsets.only(right: 14),
       child: HoldToOpen(
         borderRadius: BorderRadius.circular(ListeningPolicy.roundArtwork(10)),
-        color: ref.watch(themeProvider),
         onHold: () => ContentMenus.showSongMenu(context, song, ref),
         child: GestureDetector(
         onTap: onTap,
@@ -1679,10 +1677,11 @@ class _TrackListTile extends ConsumerWidget {
     final display = conformedForDisplay(ref, song);
 
     // Press-and-hold opens the song options menu (replaces the ⋮ button), and
-    // the hold is now visible while it charges. See HoldToOpen.
+    // the hold is visible while it charges. See HoldToOpen. This InkWell's own
+    // ripple is the hold animation every other tile copies, so it draws none.
     return HoldToOpen(
       borderRadius: BorderRadius.circular(10),
-      color: ref.watch(themeProvider),
+      ripple: false,
       onHold: () => ContentMenus.showSongMenu(context, song, ref),
       child: InkWell(
       onTap: onTap,

@@ -1,6 +1,7 @@
 import 'dart:io' show Platform;
 
 import 'package:auvy/services/event_log.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter/services.dart';
 
 /// The Dart side of the native audio player (ExoPlayer on Android, AVPlayer on
@@ -106,6 +107,7 @@ class NativeAudioEngine {
           break;
         case 'onPosition':
           final a = (call.arguments as Map?) ?? const {};
+          if (isStaleTick(a['videoId'] as String?, _expectedVideoId)) break;
           final playing = a['isPlaying'] as bool? ?? false;
           // An update while paused carries no new position. A few are normal (a seek or
           // a duration resolving while paused); a steadily climbing count means the feed
@@ -114,7 +116,11 @@ class NativeAudioEngine {
           _onPosition?.call(
             Duration(milliseconds: (a['positionMs'] as num?)?.toInt() ?? 0),
             Duration(milliseconds: (a['durationMs'] as num?)?.toInt() ?? 0),
-            playing,
+            tickPlaying(playing,
+                requested: _requested,
+                requestedAgoMs:
+                    DateTime.now().millisecondsSinceEpoch - _requestedAtMs,
+                windowMs: _requestWindowMs),
           );
           break;
         case 'onNativeNote':
@@ -129,10 +135,14 @@ class NativeAudioEngine {
           break;
         case 'onIsPlayingChanged':
           final a = (call.arguments as Map?) ?? const {};
-          _onIsPlayingChanged?.call(
-            a['isPlaying'] as bool? ?? false,
-            playWhenReady: a['playWhenReady'] as bool?,
-          );
+          final isPlaying = a['isPlaying'] as bool? ?? false;
+          final playWhenReady = a['playWhenReady'] as bool?;
+          // The player has acted on the request: ticks from here on are current.
+          // Its actual state, not playWhenReady: an iPhone restates "not playing,
+          // about to" the moment it is asked to resume, and its ticks keep saying
+          // "not playing" until AVPlayer really starts.
+          if (isPlaying == _requested) _requested = null;
+          _onIsPlayingChanged?.call(isPlaying, playWhenReady: playWhenReady);
           break;
         // Media volume just hit ZERO (native ContentObserver). Only the
         // transition to 0 is reported, never repeats while already muted.
@@ -141,7 +151,9 @@ class NativeAudioEngine {
           break;
         case 'onNativeAutoAdvance':
           final a = (call.arguments as Map?) ?? const {};
-          _onNativeAutoAdvance?.call((a['videoId'] as String?) ?? '');
+          final next = (a['videoId'] as String?) ?? '';
+          if (next.isNotEmpty) _expectedVideoId = next;
+          _onNativeAutoAdvance?.call(next);
           break;
         // Native entered or left buffering. Every track start buffers briefly, so the
         // listener decides whether a stall has lasted long enough to report.
@@ -238,6 +250,10 @@ class NativeAudioEngine {
     bool autoPlay = true,
     String? localPath,
   }) async {
+    _expectedVideoId = videoId;
+    // A load includes fetching the start of the stream, so it gets longer than
+    // a pause or resume to confirm.
+    if (autoPlay) _request(true, windowMs: 5000);
     await _call<void>('playVideo', {
       'videoId': videoId,
       'url': streamUrl,
@@ -293,7 +309,10 @@ class NativeAudioEngine {
   static Future<bool> advanceToUpcoming(String videoId) async {
     if (videoId.isEmpty) return false;
     try {
-      return await _call<bool>('advanceToUpcoming', {'videoId': videoId}) ?? false;
+      final moved =
+          await _call<bool>('advanceToUpcoming', {'videoId': videoId}) ?? false;
+      if (moved) _expectedVideoId = videoId;
+      return moved;
     } catch (_) {
       return false;
     }
@@ -307,9 +326,70 @@ class NativeAudioEngine {
     } catch (_) {}
   }
 
-  static Future<void> pause() async => _call<void>('pause');
-  static Future<void> resume() async => _call<void>('resume');
-  static Future<void> stop() async => _call<void>('stop');
+  static Future<void> pause() async {
+    _request(false);
+    return _call<void>('pause');
+  }
+
+  static Future<void> resume() async {
+    _request(true);
+    return _call<void>('resume');
+  }
+
+  /// What Dart last asked the player for, until the player confirms it.
+  static bool? _requested;
+  static int _requestedAtMs = 0;
+  static int _requestWindowMs = 1000;
+
+  static void _request(bool playing, {int windowMs = 1000}) {
+    _requested = playing;
+    _requestedAtMs = DateTime.now().millisecondsSinceEpoch;
+    _requestWindowMs = windowMs;
+  }
+
+  /// The play state a position tick may report.
+  ///
+  /// A tick carries the player's state as it was when the tick was sent, so one
+  /// sent just before a pause or resume can land just after it and undo it for
+  /// a moment; an iPhone's ticks also say "not playing" while AVPlayer is
+  /// getting ready to start. Seen 2026-10-17: a pause flipped back to playing
+  /// for 6 ms (the play button, widgets and notification updated three times
+  /// and a Listen Together host published the flip to every listener), and an
+  /// iPhone host published paused, playing within 20 ms at most starts. Until
+  /// the player confirms the request (onIsPlayingChanged), or for [windowMs]
+  /// if it never does, a tick can't contradict it.
+  @visibleForTesting
+  static bool tickPlaying(bool reported,
+          {required bool? requested,
+          required int requestedAgoMs,
+          int windowMs = 1000}) =>
+      requested != null && requestedAgoMs < windowMs && reported != requested
+          ? requested
+          : reported;
+  static Future<void> stop() async {
+    _expectedVideoId = null;
+    return _call<void>('stop');
+  }
+
+  /// The song the player was last told to play, or moved on to by itself.
+  static String? _expectedVideoId;
+
+  /// Whether a position tick is about a song other than [expected].
+  ///
+  /// After a skip the previous song stays in the player until the new one is
+  /// ready (an iPhone fetches the whole file first), and its ticks kept coming.
+  /// Read as the new song's, they put its progress bar at the old position
+  /// for a moment, could end its loading state early, and a Listen Together
+  /// host published them (seen 2026-10-17: listeners jumped 80 s into the
+  /// next song, then back). A tick that names no song (an older native build,
+  /// a source without an id) is kept.
+  @visibleForTesting
+  static bool isStaleTick(String? tickVideoId, String? expected) =>
+      tickVideoId != null &&
+      tickVideoId.isNotEmpty &&
+      expected != null &&
+      expected.isNotEmpty &&
+      tickVideoId != expected;
 
   /// Drops every cached stream URL. googlevideo URLs are tied to the IP they were
   /// resolved from, so after a Wi-Fi ↔ mobile switch they all fail; clearing them
@@ -368,6 +448,14 @@ class NativeAudioEngine {
 
   static Future<void> seek(Duration position) async =>
       _call<void>('seek', {'positionMs': position.inMilliseconds});
+
+  /// Turns the native level meter on or off (the player cover's glow; see
+  /// AudioLevelMeter). Off costs nothing.
+  static Future<void> setMetering(bool on) async => _call<void>('setMetering', {'on': on});
+
+  /// How loud the music is right now: RMS of the last buffer, 0..1, and 0 when
+  /// paused or metering is off.
+  static Future<double> getLevel() async => (await _call<num>('getLevel'))?.toDouble() ?? 0;
   static Future<void> setSpeed(double speed) async =>
       _call<void>('setSpeed', {'speed': speed});
   static Future<void> setVolume(double volume) async =>

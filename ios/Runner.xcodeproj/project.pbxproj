@@ -7,33 +7,42 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0B05B32D22A57343F65A68B8 /* AuvyNowPlayingStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 509CB02FADA9C4B053AA3181 /* AuvyNowPlayingStore.swift */; };
+		11D22D6AD91C31CC2DFA9976 /* AuvyCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD70813D6EFBAAEA685F9376 /* AuvyCommands.swift */; };
 		124E0CFC0025E90AE80D8114 /* Pods_RunnerTests.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C00D48E8C8E6301155178E07 /* Pods_RunnerTests.framework */; };
 		1498D2341E8E89220040F4C2 /* GeneratedPluginRegistrant.m in Sources */ = {isa = PBXBuildFile; fileRef = 1498D2331E8E89220040F4C2 /* GeneratedPluginRegistrant.m */; };
+		17A9AF3820D525772E36727C /* AuvyAudioTap.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8BEC6F1268CB1248C817229 /* AuvyAudioTap.swift */; };
 		1CA07F762F527718AD03B640 /* AppIcon-pink@3x.png in Resources */ = {isa = PBXBuildFile; fileRef = FB196CE4F650C24302A68920 /* AppIcon-pink@3x.png */; };
 		1F8CB8AC652F49CABA5D47C5 /* AuvyCookies.swift in Sources */ = {isa = PBXBuildFile; fileRef = 229EC3D8883D914DF26A0E34 /* AuvyCookies.swift */; };
 		2248CAED43D60F8550998876 /* AuvyPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8D5166D1011AB6555708929 /* AuvyPlayer.swift */; };
 		331C808B294A63AB00263BE5 /* RunnerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807B294A618700263BE5 /* RunnerTests.swift */; };
 		36938D0E81CFF9917468D6D5 /* AuvyStreamLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6348202E153BD1BCB067E233 /* AuvyStreamLoader.swift */; };
-		A11C0FE1D2E3F4050607080A /* AuvyMP4Repair.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11C0FE1D2E3F40506070809 /* AuvyMP4Repair.swift */; };
 		3B3967161E833CAA004F5970 /* AppFrameworkInfo.plist in Resources */ = {isa = PBXBuildFile; fileRef = 3B3967151E833CAA004F5970 /* AppFrameworkInfo.plist */; };
+		469F442729A249F97DF53A3B /* AuvyPlaybackIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24B1812EC8B7C9B8136E4ABD /* AuvyPlaybackIntents.swift */; };
 		48A4BA84ECD4454577DE3522 /* AuvySystemChannels.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9270AE343558CC0C3F20C91 /* AuvySystemChannels.swift */; };
 		573F3DDEC01CEFE99F3120BC /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = 3E6A8A79B3E6C368EEA54C4F /* GoogleService-Info.plist */; };
 		5C8E16A93739FA9E267FF194 /* AppIcon-purple@3x.png in Resources */ = {isa = PBXBuildFile; fileRef = FF91F39C2B2D6DC6E976A714 /* AppIcon-purple@3x.png */; };
 		5C9FCF20941A95C74916950E /* AppIcon-green@3x.png in Resources */ = {isa = PBXBuildFile; fileRef = 459D9D8DE2BBD9E85E65CE7D /* AppIcon-green@3x.png */; };
+		5DCF87D130F77125280183D0 /* AuvyIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD4C338916B006C07508EE5C /* AuvyIntents.swift */; };
 		61CE1EB82F410D6EE682A426 /* AppIcon-purple@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = AD91F033144523AF474B0C43 /* AppIcon-purple@2x.png */; };
 		6581332027D12D62A8D5F8E5 /* Pods_Runner.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7981CE9461164C06820FFFC9 /* Pods_Runner.framework */; };
 		74858FAF1ED2DC5600515810 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74858FAE1ED2DC5600515810 /* AppDelegate.swift */; };
+		775DF4028AB93DB9251DCB3F /* AuvyWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70BCA5DC4828803DD426C41E /* AuvyWidget.swift */; };
 		7884E8682EC3CC0700C636F2 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7884E8672EC3CC0400C636F2 /* SceneDelegate.swift */; };
 		7ACE969483510FBC16117900 /* AppIcon-green@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = 7CC57BDB5966A29D38CDAC38 /* AppIcon-green@2x.png */; };
-		A11C0FE1D2E3F4050607080C /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = A11C0FE1D2E3F4050607080B /* PrivacyInfo.xcprivacy */; };
 		7FB8F2884017397D0BD59B37 /* AppIcon-orange@3x.png in Resources */ = {isa = PBXBuildFile; fileRef = 526DCF7DD4A9D0954AAA1DC2 /* AppIcon-orange@3x.png */; };
 		97C146FC1CF9000F007C117D /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FA1CF9000F007C117D /* Main.storyboard */; };
 		97C146FE1CF9000F007C117D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FD1CF9000F007C117D /* Assets.xcassets */; };
 		97C147011CF9000F007C117D /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FF1CF9000F007C117D /* LaunchScreen.storyboard */; };
+		A11C0FE1D2E3F4050607080A /* AuvyMP4Repair.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11C0FE1D2E3F40506070809 /* AuvyMP4Repair.swift */; };
+		A11C0FE1D2E3F4050607080C /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = A11C0FE1D2E3F4050607080B /* PrivacyInfo.xcprivacy */; };
+		A467EE61FEC9A4FFF59B6F22 /* AuvyPlaybackIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24B1812EC8B7C9B8136E4ABD /* AuvyPlaybackIntents.swift */; };
 		A78FE4ED807F4E1A90CD9BF1 /* AppIcon-pink@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = 73E0639C7D40F67575E4F121 /* AppIcon-pink@2x.png */; };
+		B37F83F34E9DC65EF2438E0A /* AuvyNowPlayingStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 509CB02FADA9C4B053AA3181 /* AuvyNowPlayingStore.swift */; };
 		CB0ABEB69E42590C3D90AD35 /* AppIcon-orange@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = F311DB4910CEDF26FE48A748 /* AppIcon-orange@2x.png */; };
 		DA7FAC6FA552960ACF2DE0BC /* AppIcon-red@3x.png in Resources */ = {isa = PBXBuildFile; fileRef = 1CF76457C9525346141A095B /* AppIcon-red@3x.png */; };
 		DC733858CDF33735F88BE57D /* AppIcon-red@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = 7D8C467004063A3658FBEAE8 /* AppIcon-red@2x.png */; };
+		E31A86B222BF3B9D773EB952 /* AuvyWidget.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = D6803A40A1AD0D1C63C85A77 /* AuvyWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -43,6 +52,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = 97C146ED1CF9000F007C117D;
 			remoteInfo = Runner;
+		};
+		C821DC42C498E7568F962A24 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 97C146E61CF9000F007C117D /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = E3520EED86F2C2D2B62955A0;
+			remoteInfo = AuvyWidget;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -57,22 +73,36 @@
 			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		F2410AF5FE3E1855851D50FC /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				E31A86B222BF3B9D773EB952 /* AuvyWidget.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		0343981A026D609E779C3CAE /* Runner.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = Runner.entitlements; sourceTree = "<group>"; };
 		1498D2321E8E86230040F4C2 /* GeneratedPluginRegistrant.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = GeneratedPluginRegistrant.h; sourceTree = "<group>"; };
 		1498D2331E8E89220040F4C2 /* GeneratedPluginRegistrant.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = GeneratedPluginRegistrant.m; sourceTree = "<group>"; };
 		1CF76457C9525346141A095B /* AppIcon-red@3x.png */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = image.png; name = "AppIcon-red@3x.png"; path = "AltIcons/AppIcon-red@3x.png"; sourceTree = "<group>"; };
 		229EC3D8883D914DF26A0E34 /* AuvyCookies.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AuvyCookies.swift; sourceTree = "<group>"; };
+		24B1812EC8B7C9B8136E4ABD /* AuvyPlaybackIntents.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AuvyPlaybackIntents.swift; sourceTree = "<group>"; };
 		331C807B294A618700263BE5 /* RunnerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunnerTests.swift; sourceTree = "<group>"; };
 		331C8081294A63A400263BE5 /* RunnerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = RunnerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		3B3967151E833CAA004F5970 /* AppFrameworkInfo.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = AppFrameworkInfo.plist; path = Flutter/AppFrameworkInfo.plist; sourceTree = "<group>"; };
 		3E6A8A79B3E6C368EEA54C4F /* GoogleService-Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = "GoogleService-Info.plist"; sourceTree = "<group>"; };
 		459D9D8DE2BBD9E85E65CE7D /* AppIcon-green@3x.png */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = image.png; name = "AppIcon-green@3x.png"; path = "AltIcons/AppIcon-green@3x.png"; sourceTree = "<group>"; };
+		509CB02FADA9C4B053AA3181 /* AuvyNowPlayingStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AuvyNowPlayingStore.swift; sourceTree = "<group>"; };
 		526DCF7DD4A9D0954AAA1DC2 /* AppIcon-orange@3x.png */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = image.png; name = "AppIcon-orange@3x.png"; path = "AltIcons/AppIcon-orange@3x.png"; sourceTree = "<group>"; };
 		5E26CECAEAC007E678FE285F /* Pods-RunnerTests.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-RunnerTests.release.xcconfig"; path = "Target Support Files/Pods-RunnerTests/Pods-RunnerTests.release.xcconfig"; sourceTree = "<group>"; };
 		6348202E153BD1BCB067E233 /* AuvyStreamLoader.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AuvyStreamLoader.swift; sourceTree = "<group>"; };
-		A11C0FE1D2E3F40506070809 /* AuvyMP4Repair.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AuvyMP4Repair.swift; sourceTree = "<group>"; };
+		70BCA5DC4828803DD426C41E /* AuvyWidget.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AuvyWidget.swift; sourceTree = "<group>"; };
 		73E0639C7D40F67575E4F121 /* AppIcon-pink@2x.png */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = image.png; name = "AppIcon-pink@2x.png"; path = "AltIcons/AppIcon-pink@2x.png"; sourceTree = "<group>"; };
 		74858FAD1ED2DC5600515810 /* Runner-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Runner-Bridging-Header.h"; sourceTree = "<group>"; };
 		74858FAE1ED2DC5600515810 /* AppDelegate.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
@@ -80,7 +110,6 @@
 		7981CE9461164C06820FFFC9 /* Pods_Runner.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Runner.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		7AFA3C8E1D35360C0083082E /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = Release.xcconfig; path = Flutter/Release.xcconfig; sourceTree = "<group>"; };
 		7CC57BDB5966A29D38CDAC38 /* AppIcon-green@2x.png */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = image.png; name = "AppIcon-green@2x.png"; path = "AltIcons/AppIcon-green@2x.png"; sourceTree = "<group>"; };
-		A11C0FE1D2E3F4050607080B /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		7D8C467004063A3658FBEAE8 /* AppIcon-red@2x.png */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = image.png; name = "AppIcon-red@2x.png"; path = "AltIcons/AppIcon-red@2x.png"; sourceTree = "<group>"; };
 		8887525D8DC8FEC0E05F4A36 /* Pods-RunnerTests.profile.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-RunnerTests.profile.xcconfig"; path = "Target Support Files/Pods-RunnerTests/Pods-RunnerTests.profile.xcconfig"; sourceTree = "<group>"; };
 		931FF22B0B14ABEA26F42CF5 /* Pods-Runner.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Runner.debug.xcconfig"; path = "Target Support Files/Pods-Runner/Pods-Runner.debug.xcconfig"; sourceTree = "<group>"; };
@@ -92,18 +121,34 @@
 		97C146FD1CF9000F007C117D /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		97C147001CF9000F007C117D /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		97C147021CF9000F007C117D /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		9DA7EB9A4A60B24B267D81C6 /* AuvyWidget.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; path = AuvyWidget.xcconfig; sourceTree = "<group>"; };
+		A11C0FE1D2E3F40506070809 /* AuvyMP4Repair.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AuvyMP4Repair.swift; sourceTree = "<group>"; };
+		A11C0FE1D2E3F4050607080B /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		AD4C338916B006C07508EE5C /* AuvyIntents.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AuvyIntents.swift; sourceTree = "<group>"; };
 		AD91F033144523AF474B0C43 /* AppIcon-purple@2x.png */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = image.png; name = "AppIcon-purple@2x.png"; path = "AltIcons/AppIcon-purple@2x.png"; sourceTree = "<group>"; };
 		C00D48E8C8E6301155178E07 /* Pods_RunnerTests.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_RunnerTests.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		C0D63B30A78CB64528651653 /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		D6803A40A1AD0D1C63C85A77 /* AuvyWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = AuvyWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		D8D5166D1011AB6555708929 /* AuvyPlayer.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AuvyPlayer.swift; sourceTree = "<group>"; };
 		E11138BFDEA090D441C0B633 /* Pods-RunnerTests.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-RunnerTests.debug.xcconfig"; path = "Target Support Files/Pods-RunnerTests/Pods-RunnerTests.debug.xcconfig"; sourceTree = "<group>"; };
+		E8BEC6F1268CB1248C817229 /* AuvyAudioTap.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AuvyAudioTap.swift; sourceTree = "<group>"; };
 		F311DB4910CEDF26FE48A748 /* AppIcon-orange@2x.png */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = image.png; name = "AppIcon-orange@2x.png"; path = "AltIcons/AppIcon-orange@2x.png"; sourceTree = "<group>"; };
 		F9270AE343558CC0C3F20C91 /* AuvySystemChannels.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AuvySystemChannels.swift; sourceTree = "<group>"; };
 		FB196CE4F650C24302A68920 /* AppIcon-pink@3x.png */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = image.png; name = "AppIcon-pink@3x.png"; path = "AltIcons/AppIcon-pink@3x.png"; sourceTree = "<group>"; };
+		FBC7303CDEBDB1EB5136324D /* AuvyWidget.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = AuvyWidget.entitlements; sourceTree = "<group>"; };
+		FD70813D6EFBAAEA685F9376 /* AuvyCommands.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AuvyCommands.swift; sourceTree = "<group>"; };
 		FDB2CB2018E52ED75D3FEE62 /* Pods-Runner.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Runner.release.xcconfig"; path = "Target Support Files/Pods-Runner/Pods-Runner.release.xcconfig"; sourceTree = "<group>"; };
 		FF91F39C2B2D6DC6E976A714 /* AppIcon-purple@3x.png */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = image.png; name = "AppIcon-purple@3x.png"; path = "AltIcons/AppIcon-purple@3x.png"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		0DC8DE57DD64729F35CE32EA /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		97C146EB1CF9000F007C117D /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -129,6 +174,25 @@
 				331C807B294A618700263BE5 /* RunnerTests.swift */,
 			);
 			path = RunnerTests;
+			sourceTree = "<group>";
+		};
+		611882C88837BB522FD2162E /* iOS */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = iOS;
+			sourceTree = "<group>";
+		};
+		7037C26D1294C47A02712C9D /* AuvyWidget */ = {
+			isa = PBXGroup;
+			children = (
+				70BCA5DC4828803DD426C41E /* AuvyWidget.swift */,
+				C0D63B30A78CB64528651653 /* Info.plist */,
+				FBC7303CDEBDB1EB5136324D /* AuvyWidget.entitlements */,
+				9DA7EB9A4A60B24B267D81C6 /* AuvyWidget.xcconfig */,
+			);
+			name = AuvyWidget;
+			path = AuvyWidget;
 			sourceTree = "<group>";
 		};
 		869F6AC8606A4203FA9272B6 /* Pods */ = {
@@ -165,6 +229,8 @@
 				331C8082294A63A400263BE5 /* RunnerTests */,
 				869F6AC8606A4203FA9272B6 /* Pods */,
 				E4BB69EB3BBB2C8BC8D57237 /* Frameworks */,
+				BD82F817511059253F5D1A80 /* Shared */,
+				7037C26D1294C47A02712C9D /* AuvyWidget */,
 			);
 			sourceTree = "<group>";
 		};
@@ -173,6 +239,7 @@
 			children = (
 				97C146EE1CF9000F007C117D /* Runner.app */,
 				331C8081294A63A400263BE5 /* RunnerTests.xctest */,
+				D6803A40A1AD0D1C63C85A77 /* AuvyWidget.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -206,8 +273,22 @@
 				7D8C467004063A3658FBEAE8 /* AppIcon-red@2x.png */,
 				1CF76457C9525346141A095B /* AppIcon-red@3x.png */,
 				3E6A8A79B3E6C368EEA54C4F /* GoogleService-Info.plist */,
+				E8BEC6F1268CB1248C817229 /* AuvyAudioTap.swift */,
+				FD70813D6EFBAAEA685F9376 /* AuvyCommands.swift */,
+				AD4C338916B006C07508EE5C /* AuvyIntents.swift */,
+				0343981A026D609E779C3CAE /* Runner.entitlements */,
 			);
 			path = Runner;
+			sourceTree = "<group>";
+		};
+		BD82F817511059253F5D1A80 /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				509CB02FADA9C4B053AA3181 /* AuvyNowPlayingStore.swift */,
+				24B1812EC8B7C9B8136E4ABD /* AuvyPlaybackIntents.swift */,
+			);
+			name = Shared;
+			path = Shared;
 			sourceTree = "<group>";
 		};
 		E4BB69EB3BBB2C8BC8D57237 /* Frameworks */ = {
@@ -215,6 +296,7 @@
 			children = (
 				7981CE9461164C06820FFFC9 /* Pods_Runner.framework */,
 				C00D48E8C8E6301155178E07 /* Pods_RunnerTests.framework */,
+				611882C88837BB522FD2162E /* iOS */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -246,6 +328,7 @@
 			buildConfigurationList = 97C147051CF9000F007C117D /* Build configuration list for PBXNativeTarget "Runner" */;
 			buildPhases = (
 				840F3D786F6A02DDAFE5B309 /* [CP] Check Pods Manifest.lock */,
+				F2410AF5FE3E1855851D50FC /* Embed Foundation Extensions */,
 				9740EEB61CF901F6004384FC /* Run Script */,
 				97C146EA1CF9000F007C117D /* Sources */,
 				97C146EB1CF9000F007C117D /* Frameworks */,
@@ -258,11 +341,29 @@
 			buildRules = (
 			);
 			dependencies = (
+				619CBAC118781C4307ED15B2 /* PBXTargetDependency */,
 			);
 			name = Runner;
 			productName = Runner;
 			productReference = 97C146EE1CF9000F007C117D /* Runner.app */;
 			productType = "com.apple.product-type.application";
+		};
+		E3520EED86F2C2D2B62955A0 /* AuvyWidget */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = DF0528492523BE85523869AC /* Build configuration list for PBXNativeTarget "AuvyWidget" */;
+			buildPhases = (
+				C5F8BAE45430A6570B32F616 /* Sources */,
+				0DC8DE57DD64729F35CE32EA /* Frameworks */,
+				89AD67473610784F9770E39B /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = AuvyWidget;
+			productName = AuvyWidget;
+			productReference = D6803A40A1AD0D1C63C85A77 /* AuvyWidget.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -299,12 +400,20 @@
 			targets = (
 				97C146ED1CF9000F007C117D /* Runner */,
 				331C8080294A63A400263BE5 /* RunnerTests */,
+				E3520EED86F2C2D2B62955A0 /* AuvyWidget */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		331C807F294A63A400263BE5 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		89AD67473610784F9770E39B /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -469,6 +578,21 @@
 				A11C0FE1D2E3F4050607080A /* AuvyMP4Repair.swift in Sources */,
 				1F8CB8AC652F49CABA5D47C5 /* AuvyCookies.swift in Sources */,
 				48A4BA84ECD4454577DE3522 /* AuvySystemChannels.swift in Sources */,
+				17A9AF3820D525772E36727C /* AuvyAudioTap.swift in Sources */,
+				11D22D6AD91C31CC2DFA9976 /* AuvyCommands.swift in Sources */,
+				5DCF87D130F77125280183D0 /* AuvyIntents.swift in Sources */,
+				0B05B32D22A57343F65A68B8 /* AuvyNowPlayingStore.swift in Sources */,
+				469F442729A249F97DF53A3B /* AuvyPlaybackIntents.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C5F8BAE45430A6570B32F616 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				775DF4028AB93DB9251DCB3F /* AuvyWidget.swift in Sources */,
+				B37F83F34E9DC65EF2438E0A /* AuvyNowPlayingStore.swift in Sources */,
+				A467EE61FEC9A4FFF59B6F22 /* AuvyPlaybackIntents.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -479,6 +603,12 @@
 			isa = PBXTargetDependency;
 			target = 97C146ED1CF9000F007C117D /* Runner */;
 			targetProxy = 331C8085294A63A400263BE5 /* PBXContainerItemProxy */;
+		};
+		619CBAC118781C4307ED15B2 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = AuvyWidget;
+			target = E3520EED86F2C2D2B62955A0 /* AuvyWidget */;
+			targetProxy = C821DC42C498E7568F962A24 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -502,6 +632,36 @@
 /* End PBXVariantGroup section */
 
 /* Begin XCBuildConfiguration section */
+		09E7B525521AA8794185C3FD /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 9DA7EB9A4A60B24B267D81C6 /* AuvyWidget.xcconfig */;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_ENTITLEMENTS = AuvyWidget/AuvyWidget.entitlements;
+				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = AuvyWidget/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.auvy.app.widget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) AUVY_EXTENSION";
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
 		249021D3217E4FDB00AE95B9 /* Profile */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -560,6 +720,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_ENTITLEMENTS = Runner/Runner.entitlements;
 				CURRENT_PROJECT_VERSION = "$(FLUTTER_BUILD_NUMBER)";
 				DEVELOPMENT_TEAM = "";
 				ENABLE_BITCODE = NO;
@@ -573,6 +734,36 @@
 				SWIFT_OBJC_BRIDGING_HEADER = "Runner/Runner-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 				VERSIONING_SYSTEM = "apple-generic";
+			};
+			name = Profile;
+		};
+		29740B353E3E8F07FD7E0372 /* Profile */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 9DA7EB9A4A60B24B267D81C6 /* AuvyWidget.xcconfig */;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_ENTITLEMENTS = AuvyWidget/AuvyWidget.entitlements;
+				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = AuvyWidget/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.auvy.app.widget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) AUVY_EXTENSION";
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				VALIDATE_PRODUCT = YES;
 			};
 			name = Profile;
 		};
@@ -746,6 +937,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_ENTITLEMENTS = Runner/Runner.entitlements;
 				CURRENT_PROJECT_VERSION = "$(FLUTTER_BUILD_NUMBER)";
 				DEVELOPMENT_TEAM = "";
 				ENABLE_BITCODE = NO;
@@ -769,6 +961,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_ENTITLEMENTS = Runner/Runner.entitlements;
 				CURRENT_PROJECT_VERSION = "$(FLUTTER_BUILD_NUMBER)";
 				DEVELOPMENT_TEAM = "";
 				ENABLE_BITCODE = NO;
@@ -784,6 +977,35 @@
 				VERSIONING_SYSTEM = "apple-generic";
 			};
 			name = Release;
+		};
+		B2F729DD43D7F00CA085DB64 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 9DA7EB9A4A60B24B267D81C6 /* AuvyWidget.xcconfig */;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_ENTITLEMENTS = AuvyWidget/AuvyWidget.entitlements;
+				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = AuvyWidget/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.auvy.app.widget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) DEBUG AUVY_EXTENSION";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
 		};
 /* End XCBuildConfiguration section */
 
@@ -814,6 +1036,16 @@
 				97C147061CF9000F007C117D /* Debug */,
 				97C147071CF9000F007C117D /* Release */,
 				249021D4217E4FDB00AE95B9 /* Profile */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		DF0528492523BE85523869AC /* Build configuration list for PBXNativeTarget "AuvyWidget" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				09E7B525521AA8794185C3FD /* Release */,
+				B2F729DD43D7F00CA085DB64 /* Debug */,
+				29740B353E3E8F07FD7E0372 /* Profile */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

@@ -16,8 +16,9 @@ part of it.
 | Part | Language | Lives in | Job |
 | --- | --- | --- | --- |
 | App | Dart (Flutter, Riverpod) | `lib/` | UI, library, search, recommendations, queue logic, backup |
-| Android player | Kotlin (media3/ExoPlayer) | `android/app/src/main/kotlin/` | Playback, streaming in byte ranges, audio focus, song-recognition capture, alarm, widget |
-| iOS player | Swift (AVFoundation) | `ios/Runner/` | The same platform channels as Android (see [ios/README.md](../ios/README.md)) |
+| Android player | Kotlin (media3/ExoPlayer) | `android/app/src/main/kotlin/` | Playback, streaming in byte ranges, audio focus, song-recognition capture, alarm, widgets, Quick Settings tile, shortcuts, shared links |
+| iOS player | Swift (AVFoundation) | `ios/Runner/` | The same platform channels as Android, plus Siri and Shortcuts (see [ios/README.md](../ios/README.md)) |
+| iOS widgets | Swift (WidgetKit) | `ios/AuvyWidget/`, `ios/Shared/` | Home-screen, lock-screen and Control Center widgets; the data they share with the app |
 | Worker | JavaScript (Cloudflare Workers) | not in this repository | Verifies sign-ins, gates access, holds the API keys, proxies metadata |
 | Backup store | Firestore | your Firebase project | Encrypted, chunked library backups and Listen Together rooms |
 
@@ -130,11 +131,12 @@ Notes:
 - Bump `version:` in `pubspec.yaml` **and** `versionCode` / `versionName` in
   `android/app/build.gradle.kts`. `versionCode` must only ever increase: Android
   won't install a lower one over a higher one.
-- Tag GitHub releases with the version, e.g. `v1.3.0`, and raise the version
+- Tag GitHub releases with the version, e.g. `v1.4.0`, and raise the version
   for every release: the in-app updater compares versions, and a tag without a
   build reads as build 0, so a rebuild under the same version is not offered.
-- A release carries the Android `.apk`, and for iPhone an unsigned `.ipa` plus a
-  `source.json` (see [ios/README.md](../ios/README.md)).
+- A release carries the Android `.apk`, and for iPhone an `.ipa` signed only ad hoc
+  (no certificate, no team; just the App Group the widget shares with the app,
+  which SideStore reads) plus a `source.json` (see [ios/README.md](../ios/README.md)).
 - Build published files with the release scripts, not the everyday ones:
   `./tool/release_ios.sh <version>` on a Mac (the `.ipa` and `source.json`) and
   `.\tool\release_android.ps1 <version>` on Windows (`app-release.apk`). They build the
@@ -148,7 +150,7 @@ Notes:
 
 ## Tests
 
-The test suite (over a thousand tests) lives in the private development
+The test suite (over 1,300 tests) lives in the private development
 repository and is not part of this source release; nothing here needs it to
 build, run or change the app. Run `flutter analyze` before building a change.
 
@@ -167,7 +169,7 @@ prefix; everything else native goes to `logcat` / the Xcode console. On iPhone
 the native player's diagnostics are forwarded in full (none of them fire per
 chunk), so an export from an iPhone shows the Swift side too.
 
-`AUVY_DEBUG_LOG=true` additionally mirrors every line to the system log. It is
+`AUVY_DEBUG_LOG=true` also mirrors every line to the system log. It is
 not needed for the in-app log, and it slows the app slightly, so don't use it to
 measure performance.
 

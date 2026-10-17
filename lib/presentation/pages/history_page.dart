@@ -12,6 +12,7 @@ import 'package:auvy/providers/theme_provider.dart';
 import 'package:auvy/services/haptic_service.dart';
 import 'package:auvy/providers/density_provider.dart';
 import 'package:auvy/services/device_info_service.dart';
+import 'package:auvy/services/play_devices.dart';
 
 // LISTENING HISTORY — makeover in the Stats-page design language.
 // Overview cards (today / this week / total plays) → day-grouped timeline
@@ -66,7 +67,20 @@ class _HistoryPageState extends ConsumerState<HistoryPage> {
   final TextEditingController _searchController = TextEditingController();
 
   @override
+  void initState() {
+    super.initState();
+    // Which device each play was on arrives with the shards; redraw when it does.
+    PlayDevices.instance.version.addListener(_onDevicesChanged);
+    PlayDevices.instance.ensureLoaded();
+  }
+
+  void _onDevicesChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
   void dispose() {
+    PlayDevices.instance.version.removeListener(_onDevicesChanged);
     _searchController.dispose();
     super.dispose();
   }
@@ -100,8 +114,29 @@ class _HistoryPageState extends ConsumerState<HistoryPage> {
         s.albumTitle.toLowerCase().contains(q) ||
         (device != null && device.toLowerCase().contains(q));
 
+    // The device of each PLAY, not of the song's latest play (which used to be
+    // shown on every play of that song, and nothing on older ones): from the
+    // per-play record (see PlayDevices); failing that, the song's history entry
+    // names the device of its latest play, so that one play gets it when the
+    // times agree. Otherwise nothing: an unknown device is left blank, never
+    // guessed.
+    final seenSong = <String>{};
+    String? deviceOf(PlayEvent play) {
+      final known = PlayDevices.instance.deviceFor(
+          play.song.id, play.playedAt.millisecondsSinceEpoch, currentDevice);
+      final isLatest = seenSong.add(play.song.id); // the ledger is newest first
+      if (known != null) return known;
+      if (!isLatest) return null;
+      final at = historyPlayedAt[play.song.id];
+      if (at == null || at <= 0) return null;
+      final gap = (play.playedAt.millisecondsSinceEpoch - at).abs();
+      return gap <= const Duration(minutes: 15).inMilliseconds
+          ? historyPlayedDevice[play.song.id]
+          : null;
+    }
+
     for (final play in ledger) {
-      final songDevice = historyPlayedDevice[play.song.id];
+      final songDevice = deviceOf(play);
       if (!matchesQuery(play.song, songDevice)) continue;
       entries.add(_HistoryEntry(
         play.song,
@@ -503,6 +538,8 @@ class _HistoryTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final song = entry.song;
     final time = entry.playedAt != null ? HistoryPage._timeLabel(entry.playedAt!) : '';
+    final name = entry.deviceName?.trim() ?? '';
+    final device = name.isEmpty || name == 'Unknown device' ? null : name;
 
     return InkWell(
       onTap: onTap,
@@ -543,51 +580,49 @@ class _HistoryTile extends StatelessWidget {
                       duration: song.duration,
                       style: const TextStyle(
                           color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600)),
-                  const SizedBox(height: 4),
-                  Row(
-                    children: [
-                      Flexible(
-                        child: Text(song.displayArtist,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                                color: Colors.white.withOpacity(0.72), fontSize: 12.5)),
-                      ),
-                      if (time.isNotEmpty) ...[
-                        const SizedBox(width: 6),
-                        Text('· $time',
-                            style: TextStyle(
-                                color: theme.withOpacity(0.85),
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600)),
-                      ],
-                      if (entry.deviceName != null &&
-                          entry.deviceName!.isNotEmpty &&
-                          entry.deviceName != 'Unknown device') ...[
-                        const SizedBox(width: 6),
-                        Flexible(
-                          fit: FlexFit.loose,
-                          child: _DeviceBadge(deviceName: entry.deviceName!),
-                        ),
-                      ],
-                    ],
-                  ),
+                  const SizedBox(height: 2),
+                  Text(song.displayArtist,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: Colors.white.withOpacity(0.72), fontSize: 12.5)),
+                  if (time.isNotEmpty || device != null || entry.playCount > 1) ...[
+                    const SizedBox(height: 3),
+                    // One line, trimmed at the end: when, on which device, how
+                    // often. Nothing beside it, so nothing can overlap it.
+                    Text.rich(
+                      TextSpan(children: [
+                        if (time.isNotEmpty)
+                          TextSpan(
+                              text: time,
+                              style: TextStyle(color: theme.withOpacity(0.9), fontWeight: FontWeight.w700)),
+                        if (device != null) ...[
+                          if (time.isNotEmpty) const TextSpan(text: '  ·  '),
+                          WidgetSpan(
+                            alignment: PlaceholderAlignment.middle,
+                            child: Padding(
+                              padding: const EdgeInsets.only(right: 3),
+                              child: Icon(_deviceIcon(device),
+                                  size: 12, color: Colors.white.withOpacity(0.55)),
+                            ),
+                          ),
+                          TextSpan(text: device),
+                        ],
+                        if (entry.playCount > 1) ...[
+                          if (time.isNotEmpty || device != null) const TextSpan(text: '  ·  '),
+                          TextSpan(text: '${entry.playCount} plays'),
+                        ],
+                      ]),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          color: Colors.white.withOpacity(0.55),
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w500),
+                    ),
+                  ],
                 ],
               ),
             ),
-            if (entry.playCount > 1) ...[
-              const SizedBox(width: 8),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: theme.withOpacity(0.14),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Text('${entry.playCount}×',
-                    style: TextStyle(
-                        color: theme, fontSize: 11, fontWeight: FontWeight.w800)),
-              ),
-            ],
             IconButton(
               tooltip: 'More options',
               icon: const Icon(Icons.more_vert_rounded, color: Colors.white38, size: 20),
@@ -600,62 +635,25 @@ class _HistoryTile extends StatelessWidget {
   }
 }
 
-class _DeviceBadge extends StatelessWidget {
-  final String deviceName;
-
-  const _DeviceBadge({required this.deviceName});
-
-  static IconData _deviceIcon(String name) {
-    final lower = name.toLowerCase();
-    if (lower.contains('iphone') ||
-        lower.contains('ipad') ||
-        lower.contains('ipod') ||
-        lower.contains('apple') ||
-        lower.contains('mac') ||
-        lower.contains('ios')) {
-      return Icons.phone_iphone_rounded;
-    }
-    if (lower.contains('android') ||
-        lower.contains('samsung') ||
-        lower.contains('pixel') ||
-        lower.contains('xiaomi') ||
-        lower.contains('oneplus')) {
-      return Icons.phone_android_rounded;
-    }
-    return Icons.devices_rounded;
+/// The icon for a device name in the history's details line.
+IconData _deviceIcon(String name) {
+  final lower = name.toLowerCase();
+  if (lower.contains('iphone') ||
+      lower.contains('ipad') ||
+      lower.contains('ipod') ||
+      lower.contains('apple') ||
+      lower.contains('mac') ||
+      lower.contains('ios')) {
+    return Icons.phone_iphone_rounded;
   }
-
-  @override
-  Widget build(BuildContext context) {
-    final icon = _deviceIcon(deviceName);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: Colors.white.withOpacity(0.07), width: 0.5),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 10, color: Colors.white.withOpacity(0.65)),
-          const SizedBox(width: 3),
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 95),
-            child: Text(
-              deviceName,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: Colors.white.withOpacity(0.65),
-                fontSize: 9.5,
-                fontWeight: FontWeight.w600,
-                letterSpacing: 0.1,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
+  if (lower.contains('android') ||
+      lower.contains('samsung') ||
+      lower.contains('pixel') ||
+      lower.contains('xiaomi') ||
+      lower.contains('oneplus') ||
+      lower.contains('galaxy') ||
+      lower.startsWith('sm-')) {
+    return Icons.phone_android_rounded;
   }
+  return Icons.devices_rounded;
 }

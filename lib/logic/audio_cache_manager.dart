@@ -2192,6 +2192,70 @@ class AudioCacheManager {
     }
   }
 
+  /// Takes a "Refresh details" result into this track's cache entry: its
+  /// title, artist, album and cover. Returns the cover file it replaced, for
+  /// the caller to forget in the image caches ('' if none).
+  ///
+  /// The entry used to keep what it had when the track was cached, and its
+  /// saved cover file won wherever art is shown (getDisplayImage), so a refresh
+  /// showed on the player and was gone again by the next play (owner,
+  /// 2026-10-17); a re-cache didn't fix it either, since it reuses a cover file
+  /// already on disk. The new cover goes in under a NEW file name (an image
+  /// cache keyed by the old path could show the old pixels otherwise), and the
+  /// old file is deleted; if the new one can't be fetched, the entry keeps no
+  /// local file and the new URL shows.
+  Future<String> applyRefreshedMetadata(Song fresh) async {
+    if (!_isInitialized) await initialize();
+    final info = _cacheIndex[fresh.id];
+    if (info == null || _cacheDir == null) return '';
+    var localImage = info.localImagePath;
+    var replaced = '';
+    final newCover = fresh.image.isNotEmpty && fresh.image != info.imageUrl;
+    if (newCover) {
+      String saved = '';
+      if (fresh.image.startsWith('http')) {
+        try {
+          final res = await HttpPool()
+              .getClient()
+              .get(Uri.parse(fresh.image))
+              .timeout(const Duration(seconds: 8));
+          if (res.statusCode == 200 && res.bodyBytes.isNotEmpty) {
+            final file = File('${_cacheDir!.path}/cover_${fresh.id}_r'
+                '${DateTime.now().millisecondsSinceEpoch}.jpg');
+            await file.writeAsBytes(res.bodyBytes, flush: true);
+            saved = file.absolute.path;
+          }
+        } catch (_) {}
+      }
+      final old = info.localImagePath;
+      if (old.isNotEmpty && !old.startsWith('http') && old.startsWith(_cacheDir!.path)) {
+        try {
+          final f = File(old);
+          if (f.existsSync()) f.deleteSync();
+        } catch (_) {}
+        replaced = old;
+      }
+      localImage = saved;
+    }
+    _cacheIndex[fresh.id] = CachedTrackInfo(
+      songId: info.songId,
+      title: fresh.title.isNotEmpty ? fresh.title : info.title,
+      artist: fresh.artist.isNotEmpty ? fresh.artist : info.artist,
+      albumTitle: fresh.albumTitle.isNotEmpty ? fresh.albumTitle : info.albumTitle,
+      imageUrl: fresh.image.isNotEmpty ? fresh.image : info.imageUrl,
+      localImagePath: localImage,
+      filePath: info.filePath,
+      fileSizeBytes: info.fileSizeBytes,
+      cachedAt: info.cachedAt,
+      lastAccessedAt: info.lastAccessedAt,
+      isExplicitDownload: info.isExplicitDownload,
+    );
+    await _saveCacheIndex();
+    print('cache: took refreshed details for "${fresh.title}"'
+        '${newCover ? (localImage.isNotEmpty ? " and its new cover" : " (new cover by URL)") : ""}');
+    return replaced;
+  }
+
   /// Local cover path if cached, otherwise [fallbackUrl].
  String getDisplayImage(String songId, String fallbackUrl) {
     final info = _cacheIndex[songId];

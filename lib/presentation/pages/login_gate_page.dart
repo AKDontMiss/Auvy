@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:auvy/presentation/widgets/splash_screen.dart' show hasEstablishedLocalUser;
 import 'package:auvy/logic/session_auth_service.dart';
 import 'package:auvy/logic/session_cookie_manager.dart';
 import 'package:auvy/presentation/widgets/dynamic_background.dart';
@@ -140,7 +141,7 @@ class _LoginGatePageState extends ConsumerState<LoginGatePage>
   Future<void> _awaitCloudIfItCanChangeRouting() async {
     final notifier = ref.read(accountProvider.notifier);
     final prefs = await SharedPreferences.getInstance();
-    final alreadyOnboarded = prefs.getBool('has_onboarded') ?? false;
+    final alreadyOnboarded = (prefs.getBool('has_onboarded') ?? false) || hasEstablishedLocalUser(prefs);
     final cloud = notifier.enableCloudBackup(interactive: true);
 
     // Already onboarded on this device: the restore cannot change the routing, so
@@ -271,7 +272,8 @@ class _LoginGatePageState extends ConsumerState<LoginGatePage>
     // Re-read the onboarding flag after the cloud restore: a returning user's backup
     // sets has_onboarded=true, so they go straight into the app.
     final prefs = await SharedPreferences.getInstance();
-    final hasOnboarded = prefs.getBool('has_onboarded') ?? widget.hasOnboarded;
+    final hasOnboarded =
+        (prefs.getBool('has_onboarded') ?? widget.hasOnboarded) || hasEstablishedLocalUser(prefs);
     print('DIAG: LoginGatePage _proceed: hasOnboarded=$hasOnboarded '
         '(prefs=${prefs.getBool('has_onboarded')}, widget=${widget.hasOnboarded})');
     if (hasOnboarded && !(prefs.getBool('has_onboarded') ?? false)) {

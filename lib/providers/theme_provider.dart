@@ -10,8 +10,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:auvy/core/image_cache_manager.dart';
 import 'package:auvy/data/dummy_data.dart';
 import 'package:auvy/logic/audio_cache_manager.dart';
+import 'package:auvy/presentation/widgets/auvy_image.dart';
+import 'package:auvy/providers/connectivity_provider.dart';
 import 'package:auvy/providers/player_provider.dart';
 import 'package:auvy/services/app_icon_service.dart';
+import 'package:auvy/services/cloud_sync_service.dart';
 import 'package:auvy/services/radio_schedule_service.dart';
 
 // Provides global manual accent color
@@ -67,6 +70,8 @@ class DynamicAccentNotifier extends StateNotifier<bool> {
     state = v;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(kPref, v);
+    // A synced setting: up within the edit floor, not with the next song.
+    CloudSyncService.instance.scheduleBackup();
   }
 }
 
@@ -102,6 +107,8 @@ class PureBlackNotifier extends StateNotifier<bool> {
     state = v;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(kPref, v);
+    // A synced setting: up within the edit floor, not with the next song.
+    CloudSyncService.instance.scheduleBackup();
   }
 }
 
@@ -136,7 +143,9 @@ class ThemeNotifier extends StateNotifier<Color> {
 
   Future<void> reloadFromStorage() async {
     await _loadTheme();
-    AppIconService.applyForAccent(state);
+    // The icon that was synced, which may be the user's own pick, not one
+    // re-derived from the accent (see AppIconService.applySaved).
+    AppIconService.applySaved(state);
     print('OK: ThemeNotifier reloaded from storage -> accent=#${state.value.toRadixString(16)}');
   }
 
@@ -165,6 +174,8 @@ class ThemeNotifier extends StateNotifier<Color> {
     _manualAccent = color;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt('app_theme_color', color.value);
+    // A synced setting: up within the edit floor, not with the next song.
+    CloudSyncService.instance.scheduleBackup();
     // The launcher icon follows the accent, so the home screen matches the app
     // instead of needing its own picker. Fire-and-forget: a launcher that refuses
     // the component change must not block the colour from being applied.
@@ -279,8 +290,23 @@ class PlayerColorNotifier extends StateNotifier<Color> {
     return null;
   }
 
+  /// The player page's size of [url] instead of the full-size original. The
+  /// colour is read from an 80 px thumbnail, and the player page (or the
+  /// next-track preload) has usually saved exactly this file already, so it
+  /// costs no download; the original was a second, full-size one per song.
+  String _playerSized(String url) {
+    if (!url.startsWith('http')) return url;
+    try {
+      final sized = AuvyImage.playerArtUrl(url,
+          allowHighRes: _ref.read(connectivityProvider).shouldLoadHighResImages);
+      return sized.isNotEmpty ? sized : url;
+    } catch (_) {
+      return url;
+    }
+  }
+
   Future<void> updateFromImage(String path) async {
-    final trimmed = path.trim();
+    final trimmed = _playerSized(path.trim());
     if (trimmed.isEmpty) return;
 
     final cached = _cache[trimmed];
@@ -500,13 +526,19 @@ class PlayerControlsColorNotifier
     state = state.copyWith(mode: mode);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(kPrefMode, mode);
+    // A synced setting: up within the edit floor, not with the next song.
+    CloudSyncService.instance.scheduleBackup();
   }
 
   Future<void> setCustomColor(Color color) async {
     state = state.copyWith(mode: 'custom', customColor: color);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(kPrefMode, 'custom');
+    // A synced setting: up within the edit floor, not with the next song.
+    CloudSyncService.instance.scheduleBackup();
     await prefs.setInt(kPrefCustom, color.value);
+    // A synced setting: up within the edit floor, not with the next song.
+    CloudSyncService.instance.scheduleBackup();
   }
 }
 
@@ -552,6 +584,8 @@ class ArtworkGlowNotifier extends StateNotifier<String> {
     state = mode;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(kPrefGlow, mode);
+    // A synced setting: up within the edit floor, not with the next song.
+    CloudSyncService.instance.scheduleBackup();
   }
 }
 
@@ -589,6 +623,8 @@ class PlayerBackgroundStyleNotifier extends StateNotifier<String> {
     state = style;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(kPrefBg, style);
+    // A synced setting: up within the edit floor, not with the next song.
+    CloudSyncService.instance.scheduleBackup();
   }
 }
 

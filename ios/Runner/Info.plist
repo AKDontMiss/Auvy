@@ -86,6 +86,16 @@
 	<array>
 		<dict>
 			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>CFBundleURLName</key>
+			<string>auvy</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>auvy</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeRole</key>
 			<string>Editor</string>
 			<key>CFBundleURLName</key>
 			<string>google-signin</string>

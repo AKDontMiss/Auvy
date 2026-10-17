@@ -33,10 +33,38 @@ class SigningReminderCard extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     if (!Platform.isIOS) return const SizedBox.shrink();
     final s = ref.watch(signingReminderProvider);
-    final expiresAt = s.expiresAt;
-    if (expiresAt == null) return const SizedBox.shrink();
     final theme = ref.watch(themeProvider);
     final notifier = ref.read(signingReminderProvider.notifier);
+
+    Future<void> refreshed() async {
+      await notifier.markRefreshed();
+      final at = ref.read(signingReminderProvider).expiresAt;
+      if (at == null) return;
+      final loc = MaterialLocalizations.of(context);
+      AnimatedToast.message('Got it: signed until ${loc.formatMediumDate(at)}');
+    }
+
+    // SideStore renewed Auvy but Auvy wasn't told, so it has no date to count
+    // down to (see SigningReminderNotifier). Said once per refresh.
+    if (s.renewedUnseen && s.dismissed != s.renewedDismissKey) {
+      return _card(
+        theme: theme,
+        urgent: false,
+        icon: Icons.verified_rounded,
+        title: 'SideStore renewed Auvy',
+        body: "Auvy can't see the new date SideStore set, so its reminders are "
+            "paused. After your next refresh, tap \"I've refreshed\" here or on "
+            'the reminder to keep them on time. SideStore warns before it runs '
+            'out too.',
+        primary: "I've just refreshed",
+        onPrimary: refreshed,
+        secondary: 'OK',
+        onSecondary: notifier.dismissRenewed,
+      );
+    }
+
+    final expiresAt = s.expiresAt;
+    if (expiresAt == null) return const SizedBox.shrink();
     final now = DateTime.now();
     final stage = signingStage(expiresAt, now);
 
@@ -60,6 +88,9 @@ class SigningReminderCard extends ConsumerWidget {
         onPrimary: openSideStore,
         secondary: 'Later',
         onSecondary: () => notifier.dismiss(stage),
+        // SideStore's refresh can't be seen from here, so it's confirmed by hand.
+        refreshedLabel: "I've refreshed",
+        onRefreshed: refreshed,
         extra: offer ? 'Remind me' : null,
         onExtra: offer
             ? () async {
@@ -107,6 +138,8 @@ class SigningReminderCard extends ConsumerWidget {
     required VoidCallback onSecondary,
     String? extra,
     VoidCallback? onExtra,
+    String? refreshedLabel,
+    VoidCallback? onRefreshed,
   }) {
     final accent = urgent ? const Color(0xFFFFB74D) : theme;
     return Padding(
@@ -144,8 +177,10 @@ class SigningReminderCard extends ConsumerWidget {
                 ),
               ],
             ),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
+            // A Wrap, not a Row: with four buttons a narrow phone wraps them
+            // onto two lines instead of overflowing.
+            Wrap(
+              alignment: WrapAlignment.end,
               children: [
                 TextButton(
                   onPressed: () {
@@ -162,6 +197,14 @@ class SigningReminderCard extends ConsumerWidget {
                       onExtra();
                     },
                     child: Text(extra, style: const TextStyle(color: Colors.white)),
+                  ),
+                if (refreshedLabel != null && onRefreshed != null)
+                  TextButton(
+                    onPressed: () {
+                      HapticService.selection();
+                      onRefreshed();
+                    },
+                    child: Text(refreshedLabel, style: const TextStyle(color: Colors.white)),
                   ),
                 const SizedBox(width: 4),
                 TextButton(

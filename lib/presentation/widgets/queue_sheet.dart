@@ -19,9 +19,7 @@ import 'package:auvy/presentation/widgets/content_menus.dart';
 import 'package:auvy/presentation/widgets/animated_toast.dart';
 import 'package:auvy/providers/conform_provider.dart';
 import 'package:auvy/providers/density_provider.dart';
-
-// Easter Egg Provider: Toggling this makes the equalizer rainbow!
-final hypeModeProvider = StateProvider<bool>((ref) => false);
+import 'package:auvy/presentation/widgets/playing_equalizer.dart';
 
 // Fixed row metrics — the initial auto-scroll offset math depends on these.
 const double _kTileHeight = 64.0;
@@ -437,7 +435,7 @@ class _QueueSheetState extends ConsumerState<QueueSheet> {
                             ),
                             child: Center(
                               child: isPlaying
-                                  ? const _AnimatedEqualizer()
+                                  ? const PlayingEqualizer(size: 12)
                                   : Icon(Icons.pause_rounded, color: themeColor, size: 20),
                             ),
                           ),
@@ -1033,74 +1031,6 @@ class _QueueItemTile extends ConsumerWidget {
           const SizedBox(height: 3),
           Text(label, style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.w700)),
         ],
-      ),
-    );
-  }
-}
-
-class _AnimatedEqualizer extends ConsumerStatefulWidget {
-  const _AnimatedEqualizer();
-
-  @override
-  ConsumerState<_AnimatedEqualizer> createState() => _AnimatedEqualizerState();
-}
-
-class _AnimatedEqualizerState extends ConsumerState<_AnimatedEqualizer>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 500)
-    )..repeat(reverse: true);
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final isHype = ref.watch(hypeModeProvider);
-    final themeColor = ref.watch(themeProvider);
-
-    // RepaintBoundary: these bars animate at 60fps the whole time the sheet is
-    // open — contain the repaint to just the bars.
-    return RepaintBoundary(
-      child: Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: List.generate(3, (i) {
-        return AnimatedBuilder(
-          animation: _controller,
-          builder: (context, child) {
-            double value = (i == 1) ? _controller.value : (1 - _controller.value);
-
-            final Color barColor = isHype
-              ? HSVColor.fromAHSV(
-                  1.0,
-                  (DateTime.now().millisecondsSinceEpoch / 10) % 360,
-                  1.0,
-                  1.0
-                ).toColor()
-              : themeColor;
-
-            return Container(
-              width: 3.5,
-              height: 6 + (value * 12),
-              margin: const EdgeInsets.symmetric(horizontal: 1.5),
-              decoration: BoxDecoration(
-                color: barColor,
-                borderRadius: BorderRadius.circular(2)
-              ),
-            );
-          },
-        );
-      }),
       ),
     );
   }

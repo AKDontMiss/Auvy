@@ -1141,6 +1141,29 @@ class SearchService {
     }
   }
 
+  /// One song by its video id, for a shared YouTube or YouTube Music link.
+  ///
+  /// The watch-next feed for a video lists that video first, with the same
+  /// title, artist and artwork a search row carries. Null when YouTube doesn't
+  /// answer or the id isn't a song it can play.
+  Future<Song?> getSongById(String videoId) async {
+    final v = videoId.trim();
+    if (v.length != 11) return null;
+    try {
+      final response = await _innerTubeClient.getNext(v).timeout(const Duration(seconds: 10));
+      final List<dynamic> itemsList = response['items'] ?? [];
+      for (final item in itemsList) {
+        final m = Map<String, dynamic>.from(item as Map);
+        if (m['type'] != 'track') continue;
+        final song = _mapJsonToSong(m);
+        if (song.id == v) return song;
+      }
+    } catch (e) {
+      print('getSongById failed for $v: $e');
+    }
+    return null;
+  }
+
   /// Other editions of an album (the deluxe next to the standard, and back), at no
   /// network cost: an album browse response already includes an "Other versions"
   /// shelf, which the tracklist parse would otherwise discard. The artist page often lists

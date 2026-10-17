@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:auvy/providers/theme_provider.dart';
 import 'package:auvy/services/haptic_service.dart';
+import 'package:auvy/presentation/widgets/dynamic_background.dart';
 
 // Shared Settings row widgets, so sub-pages (Privacy, Theme, Stream sources) can
 // live in their own files. `settings_page.dart` keeps its `_ToggleRow` /
@@ -212,6 +213,41 @@ class SettingsActionRow extends StatelessWidget {
 }
 
 /// Shared scaffold for a settings sub-page so they all look identical.
+/// The page title the way the app's other pages draw it (History, What's
+/// New): a back arrow and a large title in a plain row that scrolls with the
+/// page. No bar and no block behind it. Settings, its sub-pages and About use
+/// it so they look like the rest of the app.
+class AuvyPageHeader extends StatelessWidget {
+  final String title;
+  final List<Widget> actions;
+
+  const AuvyPageHeader({super.key, required this.title, this.actions = const []});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 8, 16, 4),
+      child: Row(
+        children: [
+          IconButton(
+            tooltip: 'Back',
+            icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
+            onPressed: () => Navigator.of(context).maybePop(),
+          ),
+          const SizedBox(width: 4),
+          Expanded(
+            child: Text(title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w800, color: Colors.white)),
+          ),
+          ...actions,
+        ],
+      ),
+    );
+  }
+}
+
 class SettingsSubPage extends StatelessWidget {
   final String title;
   final List<Widget> children;
@@ -229,33 +265,37 @@ class SettingsSubPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFF0E0E12),
-      appBar: AppBar(
+    // The same backdrop and title row as Settings itself and the app's other
+    // pages, rather than a flat colour under a toolbar.
+    return DynamicBackground(
+      force: true,
+      child: Scaffold(
         backgroundColor: Colors.transparent,
-        elevation: 0,
-        iconTheme: const IconThemeData(color: Colors.white),
-        title: Text(title,
-            style: const TextStyle(
-                color: Colors.white, fontWeight: FontWeight.w800, fontSize: 18)),
-      ),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(14, 4, 14, 120),
-        physics: const BouncingScrollPhysics(),
-        children: [
-          if (header != null)
-            Padding(padding: const EdgeInsets.only(bottom: 14), child: header),
-          for (final child in children)
-            Container(
-              margin: const EdgeInsets.only(bottom: 14),
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.045),
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: Colors.white.withOpacity(0.055)),
+        body: SafeArea(
+          bottom: false,
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(14, 0, 14, 120),
+            physics: const BouncingScrollPhysics(),
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: AuvyPageHeader(title: title),
               ),
-              child: child,
-            ),
-        ],
+              if (header != null)
+                Padding(padding: const EdgeInsets.only(bottom: 14), child: header),
+              for (final child in children)
+                Container(
+                  margin: const EdgeInsets.only(bottom: 14),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.045),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: Colors.white.withOpacity(0.055)),
+                  ),
+                  child: child,
+                ),
+            ],
+          ),
+        ),
       ),
     );
   }

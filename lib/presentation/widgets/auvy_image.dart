@@ -420,6 +420,16 @@ class AuvyImage extends ConsumerWidget {
         allowHighRes);
   }
 
+  /// [path] at about [px] pixels: YouTube Music and channel art take the size
+  /// ladder's rung at or above it, YouTube thumbnails the variant that covers it.
+  /// For covers drawn outside Flutter (the home-screen widgets), which would
+  /// otherwise fetch the full-size original.
+  static String sizedUrl(String path, int px) {
+    if (path.isEmpty || !path.startsWith('http')) return path;
+    final helper = const AuvyImage(path: '');
+    return helper._sizeParamForBox(_ytimgVariantForBox(path, px), px, true);
+  }
+
   String _sizeParamForBox(String url, int? targetPx, bool allowHighRes) {
     if (targetPx == null || targetPx <= 0) return url;
     if (!url.contains('googleusercontent.com') && !url.contains('ggpht.com')) {

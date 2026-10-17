@@ -117,6 +117,15 @@ class ListeningPolicy {
   static bool allowExternalPlayStart = true;
   static const String kAllowExternalPlayStart = 'auvy_allow_external_play';
 
+  /// Ignore a headset PLAY that arrives just after a pause nobody made in the
+  /// app. Galaxy Buds (seen on both phones, 2026-10-15/16) send a pause when a bud
+  /// leaves the ear or the phone reconnects, then a play a few seconds later on
+  /// their own when it goes into the case or back in, and music started with
+  /// the listener's hands nowhere near it. On by default; off for anyone who
+  /// re-taps an earbud straight after it paused (see AuvyAudioHandler.isEarbudBounce).
+  static bool ignoreEarbudBounce = true;
+  static const String kIgnoreEarbudBounce = 'auvy_ignore_earbud_bounce';
+
   /// How many lyric lines can go on one shared card.
   ///
   /// Capped at 10 rather than unlimited: the card is a fixed 9:16, so every extra
@@ -299,6 +308,7 @@ class ListeningPolicy {
     blockScreenshots = prefs.getBool(kBlockScreenshots) ?? false;
     autoplay = prefs.getBool(kAutoplay) ?? true;
     allowExternalPlayStart = prefs.getBool(kAllowExternalPlayStart) ?? true;
+    ignoreEarbudBounce = prefs.getBool(kIgnoreEarbudBounce) ?? true;
     lyricShareMaxLines = (prefs.getInt(kLyricShareMaxLines) ?? 6).clamp(1, 10);
     lyricTextScale =
         (prefs.getDouble(kLyricTextScale) ?? 1.0).clamp(0.8, 1.4);
@@ -450,6 +460,13 @@ class ListeningPolicy {
     allowExternalPlayStart = v;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(kAllowExternalPlayStart, v);
+    CloudSyncService.instance.scheduleBackup();
+  }
+
+  static Future<void> setIgnoreEarbudBounce(bool v) async {
+    ignoreEarbudBounce = v;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(kIgnoreEarbudBounce, v);
     CloudSyncService.instance.scheduleBackup();
   }
 

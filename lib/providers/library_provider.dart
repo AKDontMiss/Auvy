@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:auvy/logic/music_link.dart';
 import 'package:auvy/services/event_log.dart';
 import 'dart:async';
 import 'dart:io' show File;
@@ -29,10 +30,80 @@ import 'package:auvy/services/set_log.dart';
 import 'package:auvy/providers/download_provider.dart';
 import 'package:auvy/core/utils/container_path_resolver.dart';
 
-// Defines sorting options for library items.
-/// How the library list is sorted.
+/// How the user's own playlists and albums are ordered on the library page
+/// (the RECENTLY ADDED run; pinned rows and the built-in folders keep their
+/// own order). Chosen from that run's header.
+///
+/// Until 2026-10-17 there was only one, the stored order, shown as "recently
+/// added" (owner: "recently added isn't enough"). [dateAdded] sorts newest
+/// first; [recentlyPlayed] puts the collections played lately first (from the
+/// record behind the Home mosaic), the rest after them newest first; [name] is
+/// A to Z; [songCount] biggest first; [custom] is the stored order, the one a
+/// drag arranges. A drag in any other order starts from what is shown and
+/// switches to [custom].
+enum SortOption { dateAdded, recentlyPlayed, name, songCount, custom }
 
-enum SortOption { dateAdded, name, songCount }
+/// Where the library page's own choices are kept (and backed up, like the
+/// other display settings): the sort above, and list or block view.
+const String kLibrarySortKey = 'library_sort_v1';
+const String kLibraryGridKey = 'library_grid_v1';
+
+SortOption librarySortFromName(String? name) => SortOption.values
+    .firstWhere((o) => o.name == name, orElse: () => SortOption.dateAdded);
+
+/// How two of the user's own rows compare under [sort]. [stored] is each row's
+/// place in the stored order (the tie-breaker everywhere, so equal rows never
+/// swap between passes); [playedAt] is when each title was last played.
+@visibleForTesting
+int Function(LibraryItem, LibraryItem) ownRowOrder(SortOption sort,
+    {required Map<LibraryItem, int> stored, Map<String, int> playedAt = const {}}) {
+  int byStored(LibraryItem a, LibraryItem b) =>
+      (stored[a] ?? 0).compareTo(stored[b] ?? 0);
+  int byAdded(LibraryItem a, LibraryItem b) {
+    final c = b.dateAdded.compareTo(a.dateAdded);
+    return c != 0 ? c : byStored(a, b);
+  }
+  int byName(LibraryItem a, LibraryItem b) {
+    final c = a.title.toLowerCase().compareTo(b.title.toLowerCase());
+    return c != 0 ? c : byStored(a, b);
+  }
+  return switch (sort) {
+    SortOption.dateAdded => byAdded,
+    // Played ones first, latest first; never played after them, newest first.
+    SortOption.recentlyPlayed => (a, b) {
+        final c = (playedAt[b.title] ?? 0).compareTo(playedAt[a.title] ?? 0);
+        return c != 0 ? c : byAdded(a, b);
+      },
+    SortOption.name => byName,
+    SortOption.songCount => (a, b) {
+        final c = b.songCount.compareTo(a.songCount);
+        return c != 0 ? c : byName(a, b);
+      },
+    SortOption.custom => byStored,
+  };
+}
+
+/// The three runs the library page shows, in this order, each under its own
+/// header and reordered only within itself.
+///
+/// The page used to put one "RECENTS" header over everything, the pinned
+/// folders and the built-in ones included (fixed 2026-10-16). What each run
+/// really holds:
+///  * [pinned]: whatever is pinned, the built-in Liked Songs, Followed Artists
+///    and the like by default.
+///  * [folders]: the built-in folders that can't be pinned (Cached, Downloads,
+///    Liked Playlists). The loader puts them back at the top on every launch,
+///    so where a drag left them never lasted anyway.
+///  * [recent]: the user's own playlists and albums. A new one lands at the
+///    top (every add inserts at the front), so this run is newest-first unless
+///    the user has dragged something.
+enum LibraryZone { pinned, folders, recent }
+
+LibraryZone libraryZoneOf(LibraryItem i) => i.isPinned
+    ? LibraryZone.pinned
+    : i.isSystemFolder
+        ? LibraryZone.folders
+        : LibraryZone.recent;
 
 // State container for all library-related data and UI preferences.
 /// What an import actually did, so the UI never reports a count for an import
@@ -288,6 +359,11 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
       }
     });
 
+    // "Recently played" follows what gets played; no other order depends on it.
+    ref.listen(recentPlaylistsProvider, (prev, next) {
+      if (state.sortOption == SortOption.recentlyPlayed) _applyFilterAndSort();
+    });
+
     // Cancel the timers when the provider is destroyed.
     ref.onDispose(() {
       _refreshTimer?.cancel();
@@ -314,6 +390,9 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
     final cacheManager = AudioCacheManager();
     await cacheManager.initialize();
     await ContainerPathResolver.ensureInitialized();
+    // An account reset can dispose this notifier while a load is in flight, and
+    // touching `ref` or `state` after that throws. Checked after each wait.
+    if (!mounted) return;
     try {
       await ref
           .read(artworkOverrideProvider.notifier)
@@ -343,6 +422,17 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
     // then back it up). Now the worst a cache callback can do is save what was just
     // loaded; `_loaded` below is a second safeguard.
     final prefs = await SharedPreferences.getInstance();
+    // The last wait in the load; everything after it runs in one go. Inside the
+    // parse below, a write to a disposed notifier would also be mistaken for a
+    // damaged library and latch _loadFailed.
+    if (!mounted) return;
+    // The page's own choices (see kLibrarySortKey), read with the library so a
+    // restore that brings another phone's applies with it. The view used to be
+    // kept nowhere, so block view went back to list on every launch.
+    state = state.copyWith(
+      sortOption: librarySortFromName(prefs.getString(kLibrarySortKey)),
+      isGrid: prefs.getBool(kLibraryGridKey) ?? state.isGrid,
+    );
     var savedData = prefs.getString(_kLibraryKey);
 
     // Last-known-good fallback
@@ -649,15 +739,21 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
     }
   }
 
-  /// Best replacement for a dead path: a regenerated local cover for this id,
-  /// then the network URL the cache index holds, else '' (clean placeholder).
+  /// Best replacement for a dead path: the network URL the cache index holds,
+  /// then a regenerated local cover for this id, else '' (clean placeholder).
+  ///
+  /// The URL first because the library is backed up and read by the account's
+  /// other phones: a path to THIS phone's file is dead there, so each phone
+  /// "healed" the other's path with its own and uploaded the library again, on
+  /// every sync (seen 2026-10-16: the same 1 MB library re-saved and re-uploaded
+  /// after each restore). A URL means the same thing everywhere, and the image
+  /// cache keeps it offline once shown.
   String _replacementImage(String songId) {
     if (songId.isEmpty) return '';
     final cache = AudioCacheManager();
-    final live = cache.getDisplayImage(songId, '');
-    if (live.isNotEmpty) return live;
     final net = cache.getTrackInfo(songId)?.imageUrl ?? '';
-    return net.startsWith('http') ? net : '';
+    if (net.startsWith('http')) return net;
+    return cache.getDisplayImage(songId, '');
   }
 
   Song _healSong(Song s, _ImageHealStats stats) {
@@ -894,39 +990,9 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
       try {
         final results = await searchService.search(query, 'track').timeout(timeout);
         if (results.isNotEmpty) {
-          // Best overlap, not the first hit: the query is "<title> <artist>", so pick the
-          // result whose title+artist covers most of those words (search order is
-          // popularity, which often puts a remix or live version first). If the top hit is
-          // the best overlap it still wins; nothing is dropped for failing to match.
-          final wanted = query
-              .toLowerCase()
-              .split(RegExp(r'[^a-z0-9]+'))
-              .where((w) => w.length > 1)
-              .toSet();
-          // A RATIO, not a raw count. Counting shared words alone rewards a
-          // result that contains every query word PLUS extras, so
-          // "Anybody (Live) Burna Boy Tribute Band" tied with the real
-          // "Anybody - Burna Boy" and rank order broke the tie the wrong way.
-          // Dividing by the UNION penalises the extras, which is exactly what
-          // separates a track from its karaoke, live and tribute versions.
-          Song bestMatch = results.first;
-          if (wanted.isNotEmpty) {
-            var bestScore = -1.0;
-            for (final r in results) {
-              final have = '${r.title} ${r.artist}'
-                  .toLowerCase()
-                  .split(RegExp(r'[^a-z0-9]+'))
-                  .where((w) => w.length > 1)
-                  .toSet();
-              final inter = wanted.intersection(have).length;
-              final union = wanted.length + have.length - inter;
-              final score = union == 0 ? 0.0 : inter / union;
-              if (score > bestScore) {
-                bestScore = score;
-                bestMatch = r;
-              }
-            }
-          }
+          // Best overlap, not the first hit (see [pickBestOverlap]): search order
+          // is popularity, which often puts a remix or live version first.
+          final bestMatch = pickBestOverlap(query, results);
           return bestMatch.copyWith(
             image: bestMatch.image.replaceAll('small', 'large').replaceAll('50x50', '500x500'), // Force HQ
           );
@@ -1160,6 +1226,17 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
       // working when it has given up.
       state = state.copyWith(clearLinkImport: true);
     }
+  }
+
+  /// The name, cover and "Title Artist" queries of a public Spotify track, album
+  /// or playlist, read the keyless way the link import does: the web player's
+  /// API first (the whole list), then the embed page (a preview). Empty when
+  /// neither answers. Used by opening a shared link.
+  Future<({String name, String cover, List<String> queries})> spotifyTrackQueries(
+      String type, String id) async {
+    final api = await _spotifyApiTracks(type, id);
+    if (api.queries.isNotEmpty) return api;
+    return _spotifyEmbedTracks(type, id);
   }
 
   /// Pulls a session access token out of the embed page's `__NEXT_DATA__`: a fallback
@@ -1603,9 +1680,17 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
     }
   }
 
-  void reorderLibraryItems({required bool isPinned, required int oldIndex, required int newIndex}) {
-    // 1. Get the specific subset of items (pinned or unpinned) the user is reordering
-    final segment = state.filteredItems.where((i) => i.isPinned == isPinned).toList();
+  void reorderLibraryItems({required LibraryZone zone, required int oldIndex, required int newIndex}) {
+    // A drag on the user's own rows while they're sorted starts from what is
+    // shown: that becomes the stored order, and the sort becomes "your order".
+    // Otherwise the indices below would point into the stored order and move
+    // the wrong row.
+    if (zone == LibraryZone.recent && state.sortOption != SortOption.custom) {
+      _adoptShownOrder();
+    }
+    // 1. Get the zone the user is reordering (see [LibraryZone]); the indices
+    // are within it.
+    final segment = state.filteredItems.where((i) => libraryZoneOf(i) == zone).toList();
     
     // Safety checks for valid indices
     if (oldIndex < 0 || oldIndex >= segment.length) return;
@@ -3144,7 +3229,52 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
   void setCategory(LibraryCategory category) { state = state.copyWith(selectedCategory: category); _applyFilterAndSort(); }
   
   // Switches the library display between list and grid views.
-  void toggleView() { state = state.copyWith(isGrid: !state.isGrid); _saveToDisk(); }
+  /// List or block view. Kept in its own setting (it used to be kept nowhere,
+  /// and re-saved the whole library on every switch for nothing).
+  void toggleView() {
+    state = state.copyWith(isGrid: !state.isGrid);
+    unawaited(_storeViewChoice());
+  }
+
+  /// How the user's own playlists and albums are sorted. See [SortOption].
+  void setSortOption(SortOption option) {
+    if (option == state.sortOption) return;
+    state = state.copyWith(sortOption: option);
+    _applyFilterAndSortNowCancellingDebounce();
+    unawaited(_storeViewChoice());
+  }
+
+  Future<void> _storeViewChoice() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(kLibrarySortKey, state.sortOption.name);
+      await prefs.setBool(kLibraryGridKey, state.isGrid);
+      CloudSyncService.instance.scheduleBackup();
+    } catch (_) {}
+  }
+
+  /// Makes the shown order of the user's own playlists and albums the stored
+  /// one, and switches to [SortOption.custom]. Rows hidden by the category
+  /// filter keep their places; only the shown rows' places are refilled.
+  void _adoptShownOrder() {
+    final shown =
+        state.filteredItems.where((i) => libraryZoneOf(i) == LibraryZone.recent).toList();
+    final shownSet = shown.toSet();
+    final all = List<LibraryItem>.from(state.allItems);
+    final slots = <int>[
+      for (var i = 0; i < all.length; i++)
+        if (shownSet.contains(all[i])) i,
+    ];
+    // Rows match by title; with two of one title the places can't be paired
+    // up safely, so the stored order stays as it was.
+    if (slots.length == shown.length) {
+      for (var k = 0; k < slots.length; k++) {
+        all[slots[k]] = shown[k];
+      }
+    }
+    state = state.copyWith(allItems: all, sortOption: SortOption.custom);
+    unawaited(_storeViewChoice());
+  }
   
   // Updates the active search query for filtering library items.
   void setSearchQuery(String query) { state = state.copyWith(searchQuery: query); _applyFilterAndSort(); }
@@ -3471,10 +3601,31 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
     for (var i = 0; i < state.allItems.length; i++) {
       orderIndex[state.allItems[i]] = i;
     }
+    // When each collection was last played, for SortOption.recentlyPlayed:
+    // the Home mosaic's record, by library title (and title, for albums and
+    // saved playlists).
+    final playedAt = <String, int>{};
+    if (state.sortOption == SortOption.recentlyPlayed) {
+      try {
+        for (final p in ref.read(recentPlaylistsProvider)) {
+          for (final t in [p.libraryTitle, p.title]) {
+            if (t == null || t.isEmpty) continue;
+            if ((playedAt[t] ?? 0) < p.playedAt) playedAt[t] = p.playedAt;
+          }
+        }
+      } catch (_) {}
+    }
+    int byStored(LibraryItem a, LibraryItem b) =>
+        (orderIndex[a] ?? 0).compareTo(orderIndex[b] ?? 0);
+    final ownOrder =
+        ownRowOrder(state.sortOption, stored: orderIndex, playedAt: playedAt);
+    // By zone, then within each: the user's own rows by the chosen sort, the
+    // others in the stored order. See [LibraryZone] and [SortOption].
     items.sort((a, b) {
-      if (a.isPinned && !b.isPinned) return -1;
-      if (!a.isPinned && b.isPinned) return 1;
-      return (orderIndex[a] ?? 0).compareTo(orderIndex[b] ?? 0);
+      final za = libraryZoneOf(a);
+      final byZone = za.index.compareTo(libraryZoneOf(b).index);
+      if (byZone != 0) return byZone;
+      return za == LibraryZone.recent ? ownOrder(a, b) : byStored(a, b);
     });
     
     state = state.copyWith(filteredItems: items);

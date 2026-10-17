@@ -8,9 +8,20 @@ import 'package:auvy/services/listening_policy.dart';
 /// A press-and-hold target that shows the hold as it charges.
 ///
 /// A bare `onLongPress` gives no feedback: the tile sits still and then a sheet
-/// appears, so the gesture can't be discovered and people lift too early. The
-/// controller is the clock for both the ring and the action: the sheet opens when
-/// the ring completes, so the two can't drift apart.
+/// appears, so the gesture can't be discovered and people lift too early. While
+/// the hold charges, ink splashes out from under the finger with the pressed
+/// highlight, and when it completes the splash bursts as the menu opens.
+///
+/// It is the ink the Quick Picks rows always showed on a hold, the look the
+/// owner picked for every tile (2026-10-16): the splash the theme makes for an
+/// InkWell (InkSparkle on Android, InkRipple on iOS), in the theme's own splash
+/// and highlight colours, created the way an InkWell creates it. A first copy
+/// drew a lighter imitation of the iOS ripple instead, which looked like
+/// neither (owner, 2026-10-17: "you haven't apparently"). The ink goes on a
+/// see-through Material above the tile, so it shows over artwork too.
+///
+/// One controller is the clock for both the ink and the action, so the menu
+/// opens as the ink bursts and the two can't drift apart.
 class HoldToOpen extends StatefulWidget {
   final Widget child;
 
@@ -20,16 +31,25 @@ class HoldToOpen extends StatefulWidget {
   /// Pixels of finger movement that abandon the charge.
   ///
   /// These tiles live in scrolling lists, so a press that turns into a scroll
-  /// must not arm anything. Flutter's own touch slop, for the same reason it
-  /// uses it: below this the finger is holding, above it the finger is dragging.
-  static const double _slop = 18;
+  /// must not arm anything. 10, iOS's own long-press allowance
+  /// (UILongPressGestureRecognizer.allowableMovement) and close to Android's 8 dp
+  /// touch slop, rather than Flutter's 18: with 18, a finger that rested for a
+  /// moment and then started a slow scroll opened the menu as the list began to
+  /// move (seen on the iPhone, 2026-10-16, on every page with these tiles).
+  static const double slop = 10;
 
-  /// Corner radius of the charge ring. Match the tile it wraps, or the stroke
-  /// cuts across the artwork's corners.
+  /// Corner radius the ink is clipped to. Match the tile it wraps, or the ink
+  /// spills past the artwork's corners.
   final BorderRadius borderRadius;
 
-  /// Accent for the ring. Falls back to the theme's primary.
-  final Color? color;
+  /// Whether to draw the ink. False for a tile whose child already has its own
+  /// (an InkWell or a ListTile): that is the same ink, already splashing under
+  /// the same finger, and a second one on top would double it.
+  final bool ripple;
+
+  /// Ink features (splashes and highlights) holds have alive, for tests.
+  @visibleForTesting
+  static int debugLiveInk = 0;
 
   /// How long the hold takes.
   ///
@@ -39,8 +59,8 @@ class HoldToOpen extends StatefulWidget {
   static const Duration holdDuration = Duration(milliseconds: 500);
 
   /// Nothing is drawn for the first 150 ms, so an ordinary tap (well under 100 ms of
-  /// contact) never flashes the ring. The charge still starts on touch; only the
-  /// drawing waits, and a hold still shows 350 ms of sweep.
+  /// contact) never flashes the ink. The charge still starts on touch; only the
+  /// drawing waits, and a hold still shows 350 ms of it.
   static const double revealAfter = 0.3;
 
   const HoldToOpen({
@@ -48,7 +68,7 @@ class HoldToOpen extends StatefulWidget {
     required this.child,
     this.onHold,
     this.borderRadius = const BorderRadius.all(Radius.circular(12)),
-    this.color,
+    this.ripple = true,
   });
 
   @override
@@ -56,17 +76,46 @@ class HoldToOpen extends StatefulWidget {
 }
 
 class _HoldToOpenState extends State<HoldToOpen>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   late final AnimationController _charge = AnimationController(
     vsync: this,
     duration: HoldToOpen.holdDuration,
     // Releasing early rewinds faster than charging. A symmetrical rewind feels
     // like the app is still thinking about it after the finger has gone.
     reverseDuration: const Duration(milliseconds: 140),
-  )..addStatusListener(_onStatus);
+    // This is the gesture's clock, not decoration. With the phone's own
+    // "reduce motion" / "remove animations" on, a normal controller runs at
+    // 5% of its duration, and the hold would fire after 25 ms: a menu on
+    // nearly every touch.
+    animationBehavior: AnimationBehavior.preserve,
+  )
+    ..addStatusListener(_onStatus)
+    ..addListener(_onCharge);
+
+  /// Where the finger landed, in the tile's own coordinates: the ink splashes
+  /// from here.
+  Offset? _touch;
+
+  /// The see-through Material above the tile that the ink is drawn on.
+  BuildContext? _inkLayer;
+
+  /// This hold's splash and pressed highlight, while they belong to it.
+  InteractiveInkFeature? _splash;
+  InkHighlight? _highlight;
+
+  /// Every ink feature still on screen, a confirmed or cancelled one included
+  /// while it fades. Disposed with the tile: an InkWell does the same, since
+  /// the Material they animate on asserts if it goes first with them running.
+  final Set<InkFeature> _liveInk = {};
 
   bool _fired = false;
   Offset? _downAt;
+
+  /// The lists this tile sits in (a shelf scrolls sideways inside a page that
+  /// scrolls down), watched while a hold charges: if either moves, the press
+  /// was the start of a scroll, whatever the finger's own movement says.
+  final List<ScrollPosition> _watched = [];
+  final Map<ScrollPosition, double> _pixelsAtDown = {};
 
   /// The charge is bounded by time as well as events: once a swipe recognizer claims
   /// the pointer, this Listener may never see a move, up or cancel. By holdDuration
@@ -77,21 +126,146 @@ class _HoldToOpenState extends State<HoldToOpen>
   void _onStatus(AnimationStatus s) {
     if (s != AnimationStatus.completed || _fired) return;
     _fired = true;
-    // The ring reaching full IS the trigger. See the note on the class.
+    _unwatchScrolls();
+    // The charge reaching full IS the trigger. See the note on the class.
     HapticService.medium();
+    // The burst: a confirmed splash, as an InkWell's on release. It plays on
+    // its own clock while the sheet rises over it.
+    _endInk(confirmed: true);
     widget.onHold?.call();
-    // Straight back to rest: the sheet is already on top, so animating the ring
-    // out would only be visible as it slid away.
+    // The press-in springs straight back.
     _charge.value = 0;
+  }
+
+  /// The visible share of the charge: 0 until [HoldToOpen.revealAfter], then
+  /// 0→1 by the moment the menu opens. The hidden first 150 ms is skipped, not
+  /// compressed.
+  double get _shown {
+    final t = _charge.value;
+    return t <= HoldToOpen.revealAfter
+        ? 0.0
+        : ((t - HoldToOpen.revealAfter) / (1 - HoldToOpen.revealAfter))
+            .clamp(0.0, 1.0);
+  }
+
+  /// Starts the ink once the charge shows (see [HoldToOpen.revealAfter]).
+  void _onCharge() {
+    if (_splash == null &&
+        !_fired &&
+        widget.ripple &&
+        _charge.status == AnimationStatus.forward &&
+        _shown > 0) {
+      _startInk();
+    }
+  }
+
+  void _startInk() {
+    final layer = _inkLayer;
+    final touch = _touch;
+    if (layer == null || touch == null || !layer.mounted) return;
+    final box = layer.findRenderObject();
+    final controller = Material.maybeOf(layer);
+    if (box is! RenderBox || !box.hasSize || controller == null) return;
+    final theme = Theme.of(context);
+    final direction = Directionality.of(context);
+    // An InkWell's own choices, since no colour or factory is set on these:
+    // the theme's splash factory and splash colour, the theme's highlight
+    // colour, clipped to the tile.
+    InkHighlight? highlight;
+    highlight = InkHighlight(
+      controller: controller,
+      referenceBox: box,
+      color: theme.highlightColor,
+      textDirection: direction,
+      borderRadius: widget.borderRadius,
+      onRemoved: () => _inkGone(highlight!),
+    );
+    InteractiveInkFeature? splash;
+    splash = theme.splashFactory.create(
+      controller: controller,
+      referenceBox: box,
+      position: touch,
+      color: theme.splashColor,
+      textDirection: direction,
+      containedInkWell: true,
+      borderRadius: widget.borderRadius,
+      onRemoved: () => _inkGone(splash!),
+    );
+    _liveInk
+      ..add(highlight)
+      ..add(splash);
+    HoldToOpen.debugLiveInk += 2;
+    highlight.activate();
+    _highlight = highlight;
+    _splash = splash;
+  }
+
+  /// Ends this hold's ink: confirmed (the burst) when the hold completes,
+  /// cancelled (a quick fade) when it's let go. Either way it then disposes
+  /// itself once faded.
+  void _endInk({required bool confirmed}) {
+    final splash = _splash;
+    _splash = null;
+    if (splash != null) confirmed ? splash.confirm() : splash.cancel();
+    _highlight?.deactivate();
+    _highlight = null;
+  }
+
+  void _inkGone(InkFeature f) {
+    if (_liveInk.remove(f)) HoldToOpen.debugLiveInk--;
+    if (identical(_splash, f)) _splash = null;
+    if (identical(_highlight, f)) _highlight = null;
+  }
+
+  /// The scroll positions of the lists around this tile, nearest of each axis.
+  List<ScrollPosition> _positions() {
+    final out = <ScrollPosition>[];
+    for (final axis in Axis.values) {
+      final p = Scrollable.maybeOf(context, axis: axis)?.position;
+      if (p != null && !out.contains(p)) out.add(p);
+    }
+    return out;
+  }
+
+  void _watchScrolls() {
+    _unwatchScrolls();
+    for (final p in _positions()) {
+      _watched.add(p);
+      _pixelsAtDown[p] = p.hasPixels ? p.pixels : 0;
+      p.addListener(_onScrolled);
+    }
+  }
+
+  void _unwatchScrolls() {
+    for (final p in _watched) {
+      p.removeListener(_onScrolled);
+    }
+    _watched.clear();
+    _pixelsAtDown.clear();
+  }
+
+  void _onScrolled() {
+    for (final p in _watched) {
+      final at = _pixelsAtDown[p];
+      if (at != null && p.hasPixels && (p.pixels - at).abs() > 1) {
+        _downAt = null;
+        _cancel();
+        return;
+      }
+    }
   }
 
   void _start() {
     if (widget.onHold == null) return;
+    // A touch that lands on a list still coasting from a fling stops the list;
+    // it isn't a press on this tile, so nothing arms.
+    if (_positions().any((p) => p.isScrollingNotifier.value)) {
+      _downAt = null;
+      return;
+    }
     _fired = false;
-    // Reduce Motion is a real setting in this app, and a ring sweeping around
-    // a tile is exactly the kind of movement it exists to stop. The GESTURE must
-    // still work identically, so the charge still runs — it simply jumps to the
-    // end rather than animating there, and the haptic still marks the moment.
+    _endInk(confirmed: false);
+    _watchScrolls();
     // Armed on every press, with a margin past the hold so it never races the
     // real completion.
     _watchdog?.cancel();
@@ -100,56 +274,74 @@ class _HoldToOpenState extends State<HoldToOpen>
       if (!mounted) return;
       if (_charge.value == 0) return;
       // Reached only when neither an up/cancel nor a completion resolved this.
+      _endInk(confirmed: false);
       _charge.value = 0;
     });
-    if (ListeningPolicy.reduceMotion) {
-      _charge.value = 0;
-      Future.delayed(HoldToOpen.holdDuration, () {
-        if (mounted && _charge.value == 0 && !_fired) _onStatus(AnimationStatus.completed);
-      });
-      return;
-    }
+    // The same charge with Reduce motion on. The ink is touch feedback, which
+    // the setting leaves alone (an InkWell's ink, Quick Picks' included, shows
+    // either way, as iOS's own touch highlights do); only the press-in, a
+    // movement of the tile itself, is left out (see build). Until 2026-10-17
+    // this mode drew nothing, so with it on every tile but Quick Picks looked
+    // dead (owner: "still not working"). One path for both modes also retires
+    // the separate timer this mode had, the one that once fired after the
+    // finger had lifted.
     _charge.forward(from: 0);
   }
 
   void _cancel() {
     _watchdog?.cancel();
     _watchdog = null;
+    _unwatchScrolls();
     // A press that began before this tile was rebuilt away keeps delivering its
     // pointer events here (the hit test lasts for the whole gesture), so this can
     // run after dispose; touching the controller then throws.
     if (!mounted || _fired) return;
+    _endInk(confirmed: false);
     _charge.reverse();
+  }
+
+  @override
+  void deactivate() {
+    // Before the Material above the tile is disposed (children go first), as an
+    // InkWell does: ink still fading animates on that Material's ticker.
+    for (final f in _liveInk.toList()) {
+      f.dispose();
+    }
+    _liveInk.clear();
+    _splash = null;
+    _highlight = null;
+    super.deactivate();
   }
 
   @override
   void dispose() {
     _watchdog?.cancel();
+    _unwatchScrolls();
     _charge.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final accent = widget.color ?? Theme.of(context).colorScheme.primary;
-    // Listener, not GestureDetector: every wrapped tile is already an InkWell, and a
-    // GestureDetector would compete with it for the tap in the gesture arena. Listener
-    // only observes raw pointer events, so the tile behaves as before. The slop test
-    // is done by hand below.
+    // Listener, not GestureDetector: every wrapped tile already handles its own tap,
+    // and a GestureDetector would compete with it for the tap in the gesture arena.
+    // Listener only observes raw pointer events, so the tile behaves as before. The
+    // slop test is done by hand below.
     return Listener(
       onPointerDown: (e) {
         _downAt = e.position;
+        _touch = e.localPosition;
         _start();
       },
       onPointerMove: (e) {
         final from = _downAt;
         if (from == null) return;
         final d = e.position - from;
-        // Horizontal movement cancels sooner (at half the slop): these tiles are swipe
-        // targets, and a swipe starts as a press. Half the slop is still well beyond a
-        // finger's natural tremor.
-        if (d.dx.abs() > HoldToOpen._slop / 2 ||
-            d.distance > HoldToOpen._slop) {
+        // Horizontal movement cancels a little sooner: these tiles are swipe targets,
+        // and a swipe starts as a press. 8 px is still well beyond a finger's natural
+        // tremor.
+        if (d.dx.abs() > HoldToOpen.slop * 0.8 ||
+            d.distance > HoldToOpen.slop) {
           // Cancel once; later moves of the same press are ignored.
           _downAt = null;
           _cancel();
@@ -165,105 +357,36 @@ class _HoldToOpenState extends State<HoldToOpen>
       },
       child: AnimatedBuilder(
         animation: _charge,
-        builder: (context, child) {
-          final t = _charge.value;
-          // Remapped so the ring still completes exactly as the menu opens: the
-          // hidden first 150ms is skipped, not compressed, and the visible sweep
-          // runs 0→1 across the remainder. See revealAfter.
-          final shown = t <= HoldToOpen.revealAfter
-              ? 0.0
-              : ((t - HoldToOpen.revealAfter) / (1 - HoldToOpen.revealAfter))
-                  .clamp(0.0, 1.0);
-          return Stack(
-            children: [
-              // A slight settle under the finger, so the tile reads as being
-              // pressed INTO rather than merely outlined. Capped small: this sits
-              // in scrolling lists and anything larger turns a scroll that starts
-              // on a tile into a visible twitch. Driven by `shown`, so a tap does
-              // not nudge the tile either.
-              Transform.scale(scale: 1 - (0.015 * shown), child: child),
-              if (shown > 0)
-                Positioned.fill(
-                  child: IgnorePointer(
-                    child: CustomPaint(
-                      painter: _ChargePainter(
-                        progress: shown,
-                        color: accent,
-                        radius: widget.borderRadius,
+        builder: (context, child) => Transform.scale(
+          // A slight settle under the finger, so the tile reads as being pressed
+          // INTO. Capped small: this sits in scrolling lists and anything larger
+          // turns a scroll that starts on a tile into a visible twitch. Driven
+          // by `shown`, so a tap does not nudge the tile either. None with
+          // Reduce motion: it moves the tile itself.
+          scale: ListeningPolicy.reduceMotion ? 1.0 : 1 - (0.015 * _shown),
+          child: child,
+        ),
+        // Built once: the charge only moves the scale, and the ink animates on
+        // the Material by itself, so a hold never rebuilds the tile.
+        child: widget.ripple
+            ? Stack(
+                children: [
+                  widget.child,
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: Material(
+                        type: MaterialType.transparency,
+                        child: Builder(builder: (layer) {
+                          _inkLayer = layer;
+                          return const SizedBox.expand();
+                        }),
                       ),
                     ),
                   ),
-                ),
-            ],
-          );
-        },
-        child: widget.child,
+                ],
+              )
+            : widget.child,
       ),
     );
   }
-}
-
-/// Traces the tile's own outline, clockwise from top-centre.
-///
-/// The outline rather than a bar or a spinner: it needs to say "this TILE is
-/// arming" while sitting on top of artwork it must not obscure, and a shape the
-/// tile already has is the one overlay that cannot look bolted on.
-class _ChargePainter extends CustomPainter {
-  final double progress;
-  final Color color;
-  final BorderRadius radius;
-
-  _ChargePainter({
-    required this.progress,
-    required this.color,
-    required this.radius,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final rect = Offset.zero & size;
-    final rrect = radius.toRRect(rect).deflate(1);
-    final path = Path()..addRRect(rrect);
-
-    // Rotate the start to top-centre. A path built from an RRect begins at the
-    // right edge, and a ring that starts there reads as off-centre.
-    final metrics = path.computeMetrics().toList();
-    if (metrics.isEmpty) return;
-    final metric = metrics.first;
-    final total = metric.length;
-    final start = total * 0.875; // top-centre, clockwise
-
-    final drawn = Path();
-    final sweep = total * progress.clamp(0.0, 1.0);
-    final first = start + sweep > total ? total - start : sweep;
-    drawn.addPath(metric.extractPath(start, start + first), Offset.zero);
-    if (sweep > first) {
-      drawn.addPath(metric.extractPath(0, sweep - first), Offset.zero);
-    }
-
-    // A dim full outline underneath, so the ring reads as filling a track rather
-    // than a stray line crawling around the artwork.
-    canvas.drawPath(
-      path,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 2
-        ..color = color.withValues(alpha: 0.14),
-    );
-    canvas.drawPath(
-      drawn,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 2
-        ..strokeCap = StrokeCap.round
-        ..color = color
-        // Brightens as it completes, so the last moments read as "about to
-        // fire" instead of the stroke simply getting longer.
-        ..maskFilter = MaskFilter.blur(BlurStyle.solid, 1.5 + 2.5 * progress),
-    );
-  }
-
-  @override
-  bool shouldRepaint(_ChargePainter old) =>
-      old.progress != progress || old.color != color;
 }

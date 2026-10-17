@@ -1,6 +1,6 @@
 # Notices and attribution
 
-Auvy is licensed under the **GNU General Public License v3.0** — see [LICENSE](LICENSE).
+Auvy is licensed under the **GNU General Public License v3.0**. See [LICENSE](LICENSE).
 
 ## Copyright
 
@@ -14,18 +14,18 @@ It is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
 without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
 PURPOSE. See [LICENSE](LICENSE) for the full terms.
 
-Portions are copyright their respective authors — see [Derived code](#derived-code)
+Portions are copyright their respective authors: see [Derived code](#derived-code)
 below, and the per-file headers those files carry.
 
 ## Additional terms under GPL-3.0 §7
 
 The following supplement the GPL, using the two categories §7 permits. They are
 **not** further restrictions: they add nothing to what you may do with this code,
-only to what you must keep while doing it. Everything the GPL grants — using,
+only to what you must keep while doing it. Everything the GPL grants (using,
 studying, modifying, redistributing, running your own build against your own
-infrastructure — is granted here without exception.
+infrastructure) is granted here without exception.
 
-**Under §7(b) — preservation of author attributions.** If you convey this work, or
+**Under §7(b): preservation of author attributions.** If you convey this work, or
 a work containing part of it, you must preserve:
 
 * the copyright notice above, in the source you distribute; and
@@ -37,7 +37,7 @@ Preserving is all that is asked. You are free to add your own notices beside it,
 and nothing here obliges you to advertise, endorse, or credit in a README, a store
 listing, or any marketing material.
 
-**Under §7(c) — no misrepresentation of origin.** A modified version must be marked
+**Under §7(c): no misrepresentation of origin.** A modified version must be marked
 in a reasonable way as different from the original, and must not present itself as
 Auvy or imply that it comes from, or is endorsed by, this project or its author. In
 practice: change the application name, the package identifier and the launcher
@@ -46,7 +46,7 @@ icon. GPL-3.0 grants copyright permissions and says nothing about trademarks (se
 
 **Why these two and no others.** §7 lists exactly which additional terms may
 accompany the GPL, and any term outside that list is a further restriction a
-recipient is entitled to strip out — which would make it worse than useless,
+recipient is entitled to strip out. That would make it worse than useless,
 because it would misrepresent what this licence actually requires. Attribution
 preservation and origin non-misrepresentation are on the list. A term such as "you
 may not remove the account-approval gate" is not, and is deliberately absent: the
@@ -68,7 +68,7 @@ nothing, and is honest about where the code came from.
 
 ## Derived code
 
-### Song recognition — `lib/logic/recognition/audio_fingerprint.dart`
+### Song recognition: `lib/logic/recognition/audio_fingerprint.dart`
 
 A Dart port of the Shazam audio-fingerprinting implementation, with this lineage:
 
@@ -80,7 +80,7 @@ A Dart port of the Shazam audio-fingerprinting implementation, with this lineage
 
 Auvy's file is a line-for-line port of Metrolist's Kotlin, which in turn ports
 SongRec's C++/Rust. Translating code into another language does not escape
-copyright — a port is a derivative work — so this is the reason Auvy is GPL-3.0,
+copyright (a port is a derivative work), so this is the reason Auvy is GPL-3.0,
 and these authors are the reason the feature exists at all.
 
 **If this file is ever removed, Auvy's licence obligation does not automatically
@@ -88,7 +88,7 @@ change.** Check whether anything else derived remains before relicensing.
 
 ### Approaches and mechanisms
 
-Auvy's development involved reading other open-source YouTube Music clients —
+Auvy's development involved reading other open-source YouTube Music clients:
 **Metrolist**, and the [InnerTune](https://github.com/z-huang/InnerTune) /
 [OuterTune](https://github.com/DD3Boh/OuterTune) lineage it credits as its own
 upstream, all GPL-3.0. Some of Auvy's approaches were arrived at with those in
@@ -124,7 +124,7 @@ shares them.
 
 ## Bundled third-party libraries
 
-Auvy's 34 direct dependencies are open-source packages under MIT, BSD and
+Auvy's 35 direct dependencies are open-source packages under MIT, BSD and
 Apache-2.0 licences (all permissive, none copyleft). Their notices, and those of
 the packages they depend on, are shown in the app under **About → Open-source
 licences**, generated from package metadata so the list can't go stale.
@@ -140,7 +140,7 @@ The optional playlist covers offered in the app are community artwork published 
 Reddit by its author, who permitted free use for non-commercial and hobby
 purposes. Auvy's use fits that: it is not sold, carries no advertising and has no
 in-app purchases. The images are served at runtime rather than bundled, and are not
-included in this source distribution — a fork should supply its own.
+included in this source distribution; a fork should supply its own.
 
 Auvy fetches no artwork from any third-party image search service; the cover
 library is a fixed, licensed set.
@@ -157,7 +157,7 @@ Auvy interoperates with. Auvy is not affiliated with, endorsed by, or sponsored 
 any of them.
 
 **Their logos are deliberately not bundled.** GPL-3.0 grants copyright
-permissions and says nothing about trademarks — another project shipping a mark does
+permissions and says nothing about trademarks, and another project shipping a mark does
 not license it for this one.
 
 ## What Auvy is

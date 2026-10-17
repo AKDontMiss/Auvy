@@ -76,6 +76,8 @@ class AppIconService {
   static Future<void> applyForAccent(Color accent) async {
     final wanted = variantForAccent(accent);
     final prefs = await SharedPreferences.getInstance();
+    final before = prefs.getString(_kPref);
+    if (before != wanted) print('icon: "${before ?? "unset"}" → "$wanted" (follows the accent)');
     await prefs.setString(_kPref, wanted);
     if (Platform.isIOS) {
       try {
@@ -92,6 +94,32 @@ class AppIconService {
       } on PlatformException {
       } on MissingPluginException {
       }
+    }
+  }
+
+  /// After a restore: puts the launcher icon in step with the SAVED variant,
+  /// which is synced and may be the user's own pick (Settings → App icon) rather
+  /// than the accent's. It used to re-derive the icon from the accent after every
+  /// restore, overwriting a hand-picked icon and making each restore look like a
+  /// change here, so the icon went up again every sync. The pref isn't touched;
+  /// with no saved variant at all (an older backup) the accent decides.
+  static Future<void> applySaved(Color accent) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!prefs.containsKey(_kPref)) {
+      await applyForAccent(accent);
+      return;
+    }
+    final saved = prefs.getString(_kPref) ?? '';
+    try {
+      if (Platform.isIOS) {
+        await _channel.invokeMethod<bool>('syncIcon', {'variant': saved});
+      } else if (Platform.isAndroid) {
+        await _channel.invokeMethod<bool>('setIcon', {'variant': saved});
+      }
+    } on PlatformException {
+      // The saved choice stays; the launcher catches up on the next change.
+    } on MissingPluginException {
+      // Older build with no icon channel.
     }
   }
 

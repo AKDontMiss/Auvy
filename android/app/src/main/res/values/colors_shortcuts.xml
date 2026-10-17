@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The long-press shortcut icons' background: the launcher icon's own badge
+     colour, so the shortcuts read as part of the same set. In its own file
+     because colors.xml is rewritten by tool/gen_adaptive_icons.ps1. -->
+<resources>
+    <color name="shortcut_background">#29282D</color>
+</resources>

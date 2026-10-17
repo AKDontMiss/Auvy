@@ -390,6 +390,19 @@ extension PlayerSystemController on PlayerNotifier {
         // Don't act before saved settings have loaded, or the toggle below would read
         // its default instead of the user's choice.
         if (!_persistenceLoaded) return;
+        // Every output change, named, so a report like "it started playing when I
+        // put an earbud in its case" can be matched to what the phone saw.
+        String outs(Iterable<AudioDevice> ds) => ds
+            .where((d) => d.isOutput)
+            .map((d) => '${d.name} (${d.type.name})')
+            .join(', ');
+        final added = outs(event.devicesAdded);
+        final removed = outs(event.devicesRemoved);
+        if (added.isNotEmpty || removed.isNotEmpty) {
+          print('audio devices: ${added.isEmpty ? '' : '+[$added] '}'
+              '${removed.isEmpty ? '' : '-[$removed] '}'
+              '(${currentState.isPlaying ? 'playing' : 'paused'})');
+        }
 
         // Disconnect → pause. A second path alongside `becomingNoisyEventStream`:
         // Android's "becoming noisy" broadcast is reliable for wired unplugs but not
@@ -910,6 +923,8 @@ extension PlayerSystemController on PlayerNotifier {
       },
       onPosition: (position, duration, isPlaying) {
         if (!mounted) return;
+        _lastNativePosition = position;
+        _lastNativePositionAt = DateTime.now();
         // Record "we were playing a moment ago" for the disconnect handler, since
         // native's becoming-noisy pause often sets isPlaying false before it runs.
         if (isPlaying) _lastPlayingAt = DateTime.now();
@@ -1470,33 +1485,31 @@ extension PlayerSystemController on PlayerNotifier {
     });
 
     _persistenceLoaded = true;
-    // A handoff that arrived during the load is taken after the restored
-    // session's own delayed seek below, so that seek can't land on it.
+    // A handoff that arrived during the load is taken only once this device's
+    // own restore has loaded AND its delayed seek has run (below). It used to
+    // wait a fixed second, and a restore slower than that could seek the
+    // handed-off song to this device's old position.
     final pendingHandoff = _pendingHandoff;
-    if (pendingHandoff != null) {
-      _pendingHandoff = null;
-      Future.delayed(const Duration(seconds: 1), () {
-        if (mounted) unawaited(_adoptHandoff(pendingHandoff));
-      });
-    }
+    _pendingHandoff = null;
 
     if (current != null && fullQueue.isNotEmpty) {
       try {
-        await _loadAndPlay(current, playImmediately: false);
-        
-        if (accurateResumePosMs > 0) {
-          Future.delayed(const Duration(milliseconds: 300), () async {
-            await NativeAudioEngine.seek(Duration(milliseconds: accurateResumePosMs));
-            final restored = Duration(milliseconds: accurateResumePosMs);
-            currentState = currentState.copyWith(position: restored);
-            // The progress bar reads this directly; without it the restored track shows
-            // 0:00 until playback starts.
-            currentPositionProvider.value = restored;
-          });
-        }
+        final restored = Duration(milliseconds: accurateResumePosMs);
+        // The progress bar, and a backup pushed while this loads, read this
+        // directly; without it the restored track shows (and hands over) 0:00.
+        if (accurateResumePosMs > 0) currentPositionProvider.value = restored;
+        await _loadAndPlay(current, playImmediately: false,
+            startFrom: accurateResumePosMs > 0 ? restored : null);
+        if (accurateResumePosMs > 0) unawaited(_settleAt(current, restored, playing: false));
       } catch (e) {
         print('WARN: Hardware queue restore failed: $e');
       }
+    }
+
+    if (pendingHandoff != null) {
+      // After the restore's own load above, whatever it took.
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      if (mounted) unawaited(_adoptHandoff(pendingHandoff));
     }
   }
 
@@ -1550,11 +1563,18 @@ extension PlayerSystemController on PlayerNotifier {
     unawaited(_adoptHandoff(raw));
   }
 
+  /// Plays another phone's song here, now, where it has got to: "Play on this
+  /// phone" in the output sheet, or that phone sending its playback here. Unlike
+  /// the automatic pick-up, it replaces whatever this phone had. False when the
+  /// handoff is unreadable, or during Listen Together (the room decides there).
+  Future<bool> takeOverHandoff(Map<String, dynamic> raw) => _adoptHandoff(raw, takeOver: true);
+
   /// Takes another device's playing state when this one is idle: loaded paused,
-  /// like a restored session, so one tap carries on.
-  Future<void> _adoptHandoff(Map<String, dynamic> raw) async {
+  /// like a restored session, so one tap carries on. With [takeOver], whether
+  /// idle or not, and playing (see [takeOverHandoff]).
+  Future<bool> _adoptHandoff(Map<String, dynamic> raw, {bool takeOver = false}) async {
     final h = PlaybackHandoff.fromJson(raw);
-    if (h == null || !mounted) return;
+    if (h == null || !mounted) return false;
     final prefs = await SharedPreferences.getInstance();
     final me = await CloudSyncService.instance.deviceId();
     final nowMs = DateTime.now().millisecondsSinceEpoch;
@@ -1562,20 +1582,25 @@ extension PlayerSystemController on PlayerNotifier {
     try {
       inRoom = ref.read(listenTogetherProvider).active;
     } catch (_) {}
-    if (!mounted ||
-        !shouldAdoptHandoff(h,
-            thisDevice: me,
-            localPlaying: currentState.isPlaying,
-            inListenTogether: inRoom,
-            localLastPlaybackMs: prefs.getInt('auvy_last_playback_at'),
-            nowMs: nowMs)) {
-      return;
+    if (!mounted) return false;
+    if (takeOver) {
+      if (inRoom) {
+        print('handoff: not taking over during Listen Together');
+        return false;
+      }
+    } else if (!shouldAdoptHandoff(h,
+        thisDevice: me,
+        localPlaying: currentState.isPlaying,
+        inListenTogether: inRoom,
+        localLastPlaybackMs: prefs.getInt('auvy_last_playback_at'),
+        nowMs: nowMs)) {
+      return false;
     }
     final songs = [
       for (final m in [h.song, ...h.next])
         if (Song.fromMap(m).id.isNotEmpty) Song.fromMap(m),
     ];
-    if (songs.isEmpty) return;
+    if (songs.isEmpty) return false;
     final target = handoffTarget(h, nowMs);
     final i = target.index.clamp(0, songs.length - 1);
     final current = songs[i];
@@ -1606,17 +1631,85 @@ extension PlayerSystemController on PlayerNotifier {
     _updateMediaItem(current);
     await _saveSettings();
     final from = h.deviceName.isNotEmpty ? h.deviceName : 'your other device';
-    print('handoff: picked up "${current.title}" at '
+    print('handoff: ${takeOver ? "took over" : "picked up"} "${current.title}" at '
         '${position.inSeconds}s from $from '
         '(${h.playing ? "it was playing, caught up ${i > 0 ? "$i song(s) on" : "within the song"}" : "it was paused"})');
-    // Loaded like a restored session: prepared and paused at the position.
-    try {
-      await _loadAndPlay(current, playImmediately: false);
-      if (position > Duration.zero && mounted) {
-        await NativeAudioEngine.seek(position);
+    if (takeOver) {
+      try {
+        await _loadAndPlay(current, startFrom: position > Duration.zero ? position : null);
+        unawaited(_settleAt(current, position, playing: true));
+      } catch (e) {
+        print('WARN: handoff: could not play "${current.title}" ($e)');
+        return false;
       }
+      return true;
+    }
+    // Loaded like a restored session: prepared and paused at the position, and
+    // kept there (see [_settleAt]).
+    try {
+      await _loadAndPlay(current, playImmediately: false,
+          startFrom: position > Duration.zero ? position : null);
+      unawaited(_settleAt(current, position, playing: false));
     } catch (e) {
       print('WARN: handoff: could not prepare "${current.title}" ($e)');
+    }
+    return true;
+  }
+
+  /// Puts a just-loaded [song] at [target] and keeps it there.
+  ///
+  /// A seek sent before the native player has the track can be dropped, and its
+  /// first position reports (0:00) then reset the bar: seen on both phones
+  /// (2026-10-16), a song handed over from the other phone showed the right
+  /// second and then went back to 0:00, and was handed back from there. So the
+  /// target is held like a user's seek (stale reports ignored), and the
+  /// player's own reports are watched for eight seconds: whenever one lands more
+  /// than two seconds off (including a report that looked right and then a
+  /// restart from 0:00 once a fetched file arrived, seen on the iPhone), it
+  /// seeks again, at most five times. While [playing], the target moves on with
+  /// the clock. It stops as soon as the listener does something themselves:
+  /// another seek, a play or pause tap, or another song.
+  Future<void> _settleAt(Song song, Duration target, {required bool playing}) async {
+    if (target < const Duration(seconds: 1)) return;
+    final started = DateTime.now();
+    final tapBefore = _lastPlayPauseHapticAt;
+    Duration expected() => playing ? target + DateTime.now().difference(started) : target;
+    Duration? ours;
+    var seeks = 0;
+    var needSeek = true;
+    var sentAt = started;
+    while (DateTime.now().difference(started) < const Duration(seconds: 8)) {
+      if (!mounted || currentState.currentSong?.id != song.id) return;
+      if (_lastPlayPauseHapticAt != tapBefore) return; // the listener tapped play/pause
+      final held = _pendingSeekTarget;
+      if (ours != null && held != null && held != ours) return; // the listener sought
+      if (needSeek) {
+        if (seeks == 5) {
+          print('WARN: position: "${song.title}" did not stay at ${target.inSeconds}s after five seeks');
+          return;
+        }
+        seeks++;
+        final t = expected();
+        ours = t;
+        _pendingSeekTarget = t;
+        _pendingSeekAt = DateTime.now();
+        currentPositionProvider.value = t;
+        currentState = currentState.copyWith(position: t);
+        sentAt = DateTime.now();
+        await NativeAudioEngine.seek(t);
+      }
+      await Future<void>.delayed(Duration(milliseconds: needSeek ? 300 * seeks : 700));
+      if (!mounted || currentState.currentSong?.id != song.id) return;
+      final tick = _lastNativePosition;
+      final tickAt = _lastNativePositionAt;
+      // No report since the seek (a paused player may stay quiet): nothing says
+      // it's wrong, so it isn't sent again.
+      if (tick == null || tickAt == null || !tickAt.isAfter(sentAt)) {
+        needSeek = false;
+        continue;
+      }
+      needSeek = (tick - expected()).abs() > const Duration(seconds: 2);
+      if (needSeek) sentAt = DateTime.now();
     }
   }
 
@@ -2116,12 +2209,14 @@ extension PlayerSystemController on PlayerNotifier {
   /// player page's own URL: the system shows media art at 320 dp at most, and the
   /// player and the next-track preload have usually fetched exactly that file
   /// already, so the notification costs nothing extra rather than a second, 1200 px
-  /// download per track. iOS can show lock-screen art full width, so it keeps the
-  /// full-size cover.
+  /// download per track. iOS can show lock-screen art full width, so it takes the
+  /// full-size cover, but only on Wi-Fi with high-res images allowed: on mobile
+  /// data it was a second ~250 KB download per song (and four more each time the
+  /// queue changed, for the prefetch), so it uses the player's file there too.
   String _mediaArtUrl(Song song) {
-    if (!Platform.isAndroid) return song.image;
-    final url = AuvyImage.playerArtUrl(song.image,
-        allowHighRes: ref.read(connectivityProvider).shouldLoadHighResImages);
+    final net = ref.read(connectivityProvider);
+    if (!Platform.isAndroid && net.isWifi && net.shouldLoadHighResImages) return song.image;
+    final url = AuvyImage.playerArtUrl(song.image, allowHighRes: net.shouldLoadHighResImages);
     return url.isNotEmpty ? url : song.image;
   }
 

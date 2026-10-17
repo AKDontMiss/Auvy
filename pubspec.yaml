@@ -17,7 +17,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.3.0+2100
+version: 1.4.0+2200
 
 environment:
   sdk: ^3.10.4
@@ -56,6 +56,8 @@ dependencies:
   # Reads a .backup archive (a zip) — ours and the InnerTune-family format.
   archive: ^4.0.9
   shared_preferences: ^2.5.4
+  # The store interface, for LargePrefsStore (lib/core/large_prefs_store.dart).
+  shared_preferences_platform_interface: ^2.4.1
   share_plus: ^12.0.1
   crypto: ^3.0.3
   permission_handler: ^12.0.1
@@ -110,6 +112,20 @@ dev_dependencies:
 # following page: https://dart.dev/tools/pub/pubspec
 
 # The following section is specific to Flutter packages.
+dependency_overrides:
+  # metadata_god's Rust core is generated with flutter_rust_bridge =2.11.1 (its
+  # Cargo.toml pins it exactly), and the Dart side of the bridge must be the same
+  # version or the two can disagree on the wire format at run time. An in-range
+  # `flutter pub upgrade` moved the Dart side to 2.13.0 (2026-10-16); held here
+  # until metadata_god itself moves.
+  flutter_rust_bridge: 2.11.1
+  # 2.3.x replaced the Android plugin class with a JNI implementation, but the
+  # song-recognition service registers `io.flutter.plugins.pathprovider
+  # .PathProviderPlugin` by hand in its headless engine (AudioCaptureService.kt),
+  # so the build broke (2026-10-16). Held at the last plugin-class release until
+  # that engine is moved to the JNI one.
+  path_provider_android: 2.2.22
+
 flutter:
 
   assets:

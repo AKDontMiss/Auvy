@@ -42,8 +42,8 @@ android {
         // not read the pubspec value), and tag the release `v<name>+<code>`, e.g.
         // v1.2.9+2090. A bare `v1.2.9` parses as build 0 and the in-app updater will
         // never offer it.
-        versionCode = 2100
-        versionName = "1.3.0"
+        versionCode = 2200
+        versionName = "1.4.0"
 
         // Only the ARM ABIs are shipped: arm64-v8a for modern phones and
         // armeabi-v7a for 32-bit ones. x86_64 (emulators, some Chromebooks) is
@@ -145,7 +145,7 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer:1.2.1")
     implementation("androidx.media3:media3-exoplayer-hls:1.2.1") // HLS (.m3u8) live radio
     implementation("androidx.media3:media3-common:1.2.1")
-    implementation("androidx.media3:media3-datasource:1.2.0")
+    implementation("androidx.media3:media3-datasource:1.2.1") // same version as every media3 module (it resolved to 1.2.1 anyway)
     // media3 SimpleCache/CacheDataSource live in media3-datasource; the SimpleCache
     // index needs a DatabaseProvider from media3-database (the streaming play-cache
     // for the lazy ResolvingDataSource — see NativePlayerManager).

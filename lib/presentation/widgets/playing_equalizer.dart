@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:auvy/presentation/widgets/visible_clock_hold.dart';
 import 'package:auvy/providers/theme_provider.dart';
 
 /// The three bouncing bars marking the row that's currently playing.
@@ -31,51 +32,24 @@ class PlayingEqualizer extends ConsumerStatefulWidget {
 /// A Timer, not an AnimationController: a Ticker requests a frame every vsync (120
 /// a second on a 120 Hz screen) for as long as a track is loaded. Stepping every
 /// 60 ms (~16 fps) looks the same for this indicator and produces frames only when
-/// the value changes.
-class _PlayingEqualizerState extends ConsumerState<PlayingEqualizer> {
-  static const Duration _step = Duration(milliseconds: 60);
-  static const int _stepsPerHalfCycle = 8; // 8 × 60ms ≈ the old 500ms half cycle
-
-  final ValueNotifier<double> _phase = ValueNotifier<double>(0.0);
-  Timer? _timer;
-  int _tick = 0;
+/// the value changes. The timer is shared; see [_EqualizerClock].
+class _PlayingEqualizerState extends ConsumerState<PlayingEqualizer>
+    with VisibleClockHold {
+  @override
+  void acquireClock() => _EqualizerClock.instance.acquire();
+  @override
+  void releaseClock() => _EqualizerClock.instance.release();
 
   @override
   void initState() {
     super.initState();
-    if (widget.playing) _start();
-  }
-
-  void _start() {
-    _timer?.cancel();
-    _timer = Timer.periodic(_step, (_) {
-      _tick++;
-      // Ping-pong 0→1→0, matching repeat(reverse: true).
-      final int span = _stepsPerHalfCycle * 2;
-      final int p = _tick % span;
-      _phase.value =
-          (p < _stepsPerHalfCycle ? p : span - p) / _stepsPerHalfCycle;
-    });
+    wantClock(widget.playing);
   }
 
   @override
   void didUpdateWidget(PlayingEqualizer oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.playing != oldWidget.playing) {
-      if (widget.playing) {
-        _start();
-      } else {
-        _timer?.cancel();
-        _timer = null;
-      }
-    }
-  }
-
-  @override
-  void dispose() {
-    _timer?.cancel();
-    _phase.dispose();
-    super.dispose();
+    wantClock(widget.playing);
   }
 
   @override
@@ -89,7 +63,7 @@ class _PlayingEqualizerState extends ConsumerState<PlayingEqualizer> {
       child: CustomPaint(
         size: Size(15, maxBarHeight),
         painter: _EqualizerPainter(
-          phase: _phase,
+          phase: _EqualizerClock.instance.phase,
           color: themeColor,
           size: widget.size,
           playing: widget.playing,
@@ -139,3 +113,76 @@ class _EqualizerPainter extends CustomPainter {
   bool shouldRepaint(_EqualizerPainter old) =>
       old.color != color || old.size != size || old.playing != playing;
 }
+
+/// One clock for every equalizer on screen.
+///
+/// Each equalizer used to run its own 60 ms timer. The playing song often shows
+/// in several places at once (a home shelf, Quick Picks, the mosaic, rows kept
+/// loaded just off screen), and unsynchronised timers meant a frame for each:
+/// measured on the Galaxy (2026-10-17), ~25 frames a second on the home page,
+/// and each frame there is a whole-screen render (5-7 ms). Shared, they all step
+/// in the same frame, ~16 a second however many are showing.
+///
+/// It also stops while the app isn't in the foreground, where nobody can see
+/// it: the timers kept waking the app ~16 times a second each with the screen
+/// off. It picks up again on return, from where it stopped.
+class _EqualizerClock with WidgetsBindingObserver {
+  _EqualizerClock._();
+  static final _EqualizerClock instance = _EqualizerClock._();
+
+  static const Duration _step = Duration(milliseconds: 60);
+  static const int _stepsPerHalfCycle = 8; // 8 × 60ms ≈ the old 500ms half cycle
+
+  final ValueNotifier<double> phase = ValueNotifier<double>(0.0);
+  Timer? _timer;
+  int _tick = 0;
+  int _users = 0;
+  bool _observing = false;
+  bool _foreground = true;
+
+  /// Whether the timer is running (for tests).
+  @visibleForTesting
+  static bool get running => instance._timer != null;
+
+  void acquire() {
+    _users++;
+    if (!_observing) {
+      _observing = true;
+      WidgetsBinding.instance.addObserver(this);
+      final s = WidgetsBinding.instance.lifecycleState;
+      _foreground = s == null || s == AppLifecycleState.resumed;
+    }
+    _sync();
+  }
+
+  void release() {
+    if (_users > 0) _users--;
+    _sync();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _foreground = state == AppLifecycleState.resumed;
+    _sync();
+  }
+
+  void _sync() {
+    final want = _users > 0 && _foreground;
+    if (want && _timer == null) {
+      _timer = Timer.periodic(_step, (_) {
+        _tick++;
+        // Ping-pong 0→1→0, matching repeat(reverse: true).
+        const span = _stepsPerHalfCycle * 2;
+        final p = _tick % span;
+        phase.value = (p < _stepsPerHalfCycle ? p : span - p) / _stepsPerHalfCycle;
+      });
+    } else if (!want && _timer != null) {
+      _timer!.cancel();
+      _timer = null;
+    }
+  }
+}
+
+/// Test access to the shared equalizer clock.
+@visibleForTesting
+bool get equalizerClockRunning => _EqualizerClock.running;

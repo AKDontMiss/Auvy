@@ -1,3 +1,4 @@
+import 'package:auvy/services/app_commands.dart';
 import 'package:auvy/services/listening_policy.dart';
 import 'package:auvy/providers/view_count_provider.dart';
 import 'package:auvy/presentation/widgets/item_transfer_overlay.dart';
@@ -684,6 +685,13 @@ class _PlaylistPageState extends ConsumerState<PlaylistPage> {
   /// sort changes.
   String _lastSortLogged = '';
 
+  Future<void> _pinToHomeScreen(String title, String image) async {
+    HapticService.selection();
+    // The launcher shows its own confirmation, so success needs no toast.
+    final ok = await AppCommands.pinPlaylist(title, image: image);
+    if (!ok) AnimatedToast.message("This home screen can't add shortcuts");
+  }
+
   void _sharePlaylist(String title, String image, String subtitle) {
     final themeColor = ref.read(themeProvider);
     // The real playlist id, so the postcard can print a link. `externalId` is the
@@ -984,6 +992,13 @@ class _PlaylistPageState extends ConsumerState<PlaylistPage> {
           icon: Icons.ios_share_rounded,
           onTap: () => _sharePlaylist(title, imagePath, subtitle),
         ),
+        // Android: the playlist as its own home-screen icon (one tap plays it),
+        // the counterpart of "Hey Siri, play … in Auvy" on iPhone.
+        if (Platform.isAndroid && title != 'Cached')
+          _CircleGlassButton(
+            icon: Icons.add_to_home_screen_rounded,
+            onTap: () => _pinToHomeScreen(title, imagePath),
+          ),
         if (title == "Downloads")
           _CircleGlassButton(
             icon: Icons.folder_open_rounded,

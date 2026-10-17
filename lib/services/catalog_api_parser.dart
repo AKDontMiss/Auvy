@@ -328,6 +328,16 @@ class CatalogApiParser {
   static String playabilityStatus(Map raw) =>
       (_dig(raw, ['playabilityStatus', 'status']) ?? '').toString();
 
+  /// YouTube's one-line reason for a refusal ("Video unavailable", "Sign in to
+  /// confirm you're not a bot"), for the log: whitespace collapsed, at most 80
+  /// characters. Says what's wrong with the video or session, nothing about the
+  /// user.
+  static String playabilityReason(Map raw) {
+    final r = (_dig(raw, ['playabilityStatus', 'reason']) ?? '').toString();
+    final one = r.replaceAll(RegExp(r'\s+'), ' ').trim();
+    return one.length > 80 ? '${one.substring(0, 80)}…' : one;
+  }
+
   /// Parse the home/explore feed (FEmusic_home) into titled carousels:
   /// `[{ title, items: [...] }]`. Items may be tracks, albums or playlists.
   static List<Map<String, dynamic>> parseHomeSections(Map raw) {

@@ -2,5 +2,6 @@
 <resources>
     <!-- Home-screen player widget (shown in the launcher's widget picker). -->
     <string name="widget_player_label">Now Playing</string>
+    <string name="widget_mixes_desc">Liked Songs, Weekly Discovery, My Top 50 or everything shuffled, one tap each.</string>
     <string name="widget_player_desc">Control playback and like the current song from your home screen.</string>
 </resources>

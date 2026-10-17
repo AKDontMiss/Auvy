@@ -57,6 +57,24 @@ class CatalogApiClient {
   /// response carrying a responseContext replaces it.
   static bool _visitorStale = false;
 
+  /// Whole-chain refusals in a row, across tracks, with no stream resolved in
+  /// between. One means that video is unavailable (taken down, region-locked):
+  /// the chain refused it while other songs played fine either side (seen on
+  /// the Galaxy, 2026-10-16: four such videos in 23 minutes, each followed a
+  /// second later by another upload playing). Two in a row is the signature of
+  /// a visitor id that has gone stale, which affects every video.
+  static int _chainRefusalsInARow = 0;
+
+  /// Signed player requests were answered 400 ("the endpoint rejects
+  /// authenticated requests"); until then the signed pass isn't tried again.
+  /// Each try sent the session with a play for nothing.
+  static DateTime? _signedPassRejectedUntil;
+
+  /// Refusals that signing in might change: a login or age gate. "UNPLAYABLE"
+  /// and "ERROR" are about the video, and the session can't help with those.
+  static bool _signInCouldHelp(String status) =>
+      status == 'LOGIN_REQUIRED' || status.startsWith('AGE_') || status == 'CONTENT_CHECK_REQUIRED';
+
   // Tunable network budgets
   // These were hardcoded literals scattered across the methods below. An
   // interactive audio app must fail over FAST rather than hang, so they're
@@ -426,6 +444,8 @@ class CatalogApiClient {
     // cure — e.g. a chunk mid-track keeps 403ing), the caller bumps this so we
     // resolve a DIFFERENT client/format instead of hammering the gated one.
     final order = CatalogApiClients.streamOrder;
+    // What each client said, for the decisions after the guest chain.
+    final refusals = <String>{};
     // Two passes at most. The first is GUEST and is the only one that normally
     // runs. The second attaches the user's session and only happens when the
     // whole guest chain came back with nothing. See the note below.
@@ -436,7 +456,12 @@ class CatalogApiClient {
         // player requests, and signing the request is the only thing that could change
         // that. Only tried after the guest chain failed, because the player endpoint has
         // answered 400 to signed requests (see [_postPlayer]) and a signed request ties
-        // the play to the account.
+        // the play to the account. And only when a client asked for a sign-in or an
+        // age check: a video that is UNPLAYABLE for every guest client is unavailable
+        // as such, and the session can't change that.
+        if (!refusals.any(_signInCouldHelp)) break;
+        final until = _signedPassRejectedUntil;
+        if (until != null && DateTime.now().isBefore(until)) break;
         if (!await _cookies.hasAuthCookies()) break;
         if (DateTime.now().isAfter(deadline)) break;
         print('guest chain exhausted — retrying once with the signed-in session');
@@ -458,7 +483,10 @@ class CatalogApiClient {
         final raw = await _postPlayer(client, videoId, authenticated: authed);
         final status = CatalogApiParser.playabilityStatus(raw);
         if (status != 'OK') {
-          print('${client.clientName}: playability=$status');
+          final reason = CatalogApiParser.playabilityReason(raw);
+          print('${client.clientName}${authed ? " (signed in)" : ""}: playability=$status'
+              '${reason.isEmpty ? "" : " — $reason"}');
+          refusals.add(status);
           continue;
         }
 
@@ -480,6 +508,7 @@ class CatalogApiClient {
         }
 
         print('${client.clientName}: stream OK (${fmt['bitrate']} bps)');
+        _chainRefusalsInARow = 0;
         // Opportunistic: if a stream client ever returns the publish date, keep it.
         // None do today, so [getPublishDate] does its own WEB_REMIX lookup.
         final resolvedDate = _publishDateOf(raw);
@@ -517,8 +546,9 @@ class CatalogApiClient {
         // the shape of signed player requests, so every remaining client would get it
         // too. A 403, timeout or playability answer is per-client, so those continue.
         if (authed && e is CatalogApiException && e.statusCode == 400) {
+          _signedPassRejectedUntil = DateTime.now().add(const Duration(hours: 12));
           print('signed-in pass abandoned: the player endpoint rejects '
-              'authenticated requests (400) — the rest would too');
+              'authenticated requests (400) — the rest would too; not tried again for 12 h');
           break;
         }
         // A DNS failure ("Failed host lookup") means the device has no working network,
@@ -534,15 +564,26 @@ class CatalogApiClient {
       }
     }
     }
-    // Every client refused. That is the documented signature of an unusable
-    // visitor id (see [_visitorStale]), so let the next response replace it
-    // rather than carrying the same one into the same refusal again.
-    if (!_visitorStale) {
+    // Every client refused. Twice in a row (two tracks, nothing played in between),
+    // or with a sign-in demanded, that is the documented signature of an unusable
+    // visitor id (see [_visitorStale]), so let the next response replace it rather
+    // than carrying the same one into the same refusal again. Once, for one video,
+    // it is that video (see [_chainRefusalsInARow]).
+    _chainRefusalsInARow++;
+    final sessionLooksStale =
+        _chainRefusalsInARow >= 2 || refusals.contains('LOGIN_REQUIRED');
+    if (!sessionLooksStale) {
+      print('every client refused $videoId (${refusals.join(", ")}) — this video, '
+          'not the session: other tracks resolve fine');
+    } else if (!_visitorStale) {
       _visitorStale = true;
       print('every client refused — treating the visitor id as stale so the '
           'next response can replace it');
     }
-    print('ERROR: No playable stream resolved for $videoId '
+    // The caller tries another upload of the song next (getStreamWithFallback), so
+    // one unavailable video isn't an error; a session that looks stale is.
+    print('${sessionLooksStale ? "ERROR: No playable stream resolved" : "No playable stream (this upload is unavailable; the player tries another)"} '
+        'for $videoId '
         '(visitor id ${_visitorData == null || _visitorData!.isEmpty ? "ABSENT" : "present"})');
     return null;
   }

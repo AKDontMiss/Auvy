@@ -8,6 +8,7 @@ import Foundation
 import UIKit
 import UniformTypeIdentifiers
 import UserNotifications
+import WidgetKit
 #if canImport(AlarmKit)
 import ActivityKit
 import AlarmKit
@@ -75,6 +76,7 @@ final class AuvySystemChannels: NSObject {
         // this also shows them while Auvy is open, which iOS otherwise doesn't.
         notificationDelegate.previous = UNUserNotificationCenter.current().delegate
         UNUserNotificationCenter.current().delegate = notificationDelegate
+        AuvySystemChannels.registerSigningCategory()
         whatsNew = AuvyWhatsNew(messenger: messenger)
     }
 
@@ -364,12 +366,104 @@ final class AuvySystemChannels: NSObject {
 
     // MARK: Widget
 
+    /// The cover the widgets were last given, so a new one is fetched only when
+    /// the song changes.
+    private var widgetArtSource = ""
+
+    /// The now-playing push that also feeds Android's widget, written where the
+    /// iPhone widgets read it (AuvyNowPlayingStore, in the App Group), then the
+    /// widgets and the Control Center button are told to redraw. Dart sends it
+    /// only when something shown changes. With no App Group (an Xcode build on a
+    /// free team) there is nowhere to write, and the widget says to open Auvy.
     private func widget(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
-        // A home-screen widget on iOS is WidgetKit + App Intents in a separate
-        // extension target — a rewrite rather than a port, and not built yet.
-        // Answering rather than throwing keeps the update calls (which fire on
-        // every track change) from surfacing as unhandled errors.
-        result(nil)
+        defer { result(nil) }
+        guard call.method == "update", let args = call.arguments as? [String: Any],
+              AuvyNowPlayingStore.container != nil else { return }
+        var state = AuvyNowPlayingStore.load()
+        state.title = args["title"] as? String ?? ""
+        state.artist = args["artist"] as? String ?? ""
+        state.hasSong = args["hasSong"] as? Bool ?? false
+        state.isPlaying = args["isPlaying"] as? Bool ?? false
+        state.isLiked = args["isLiked"] as? Bool ?? false
+        if let accent = (args["accent"] as? NSNumber)?.int64Value {
+            state.accent = UInt32(truncatingIfNeeded: accent) & 0xFFFFFF
+        }
+        state.context = args["context"] as? String ?? ""
+        state.positionMs = (args["positionMs"] as? NSNumber)?.intValue ?? 0
+        state.durationMs = (args["durationMs"] as? NSNumber)?.intValue ?? 0
+        state.sampledAtMs = (args["sampledAtMs"] as? NSNumber)?.doubleValue ?? Date().timeIntervalSince1970 * 1000
+        state.upNext = args["upNext"] as? [String] ?? []
+        AuvyNowPlayingStore.save(state)
+        reloadWidgets()
+
+        let image = args["image"] as? String ?? ""
+        guard state.hasSong, !image.isEmpty, image != widgetArtSource else { return }
+        widgetArtSource = image
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let picture: UIImage? = {
+                if image.hasPrefix("http"), let url = URL(string: image) {
+                    return (try? Data(contentsOf: url)).flatMap(UIImage.init(data:))
+                }
+                return UIImage(contentsOfFile: image.replacingOccurrences(of: "file://", with: ""))
+            }()
+            guard let picture = picture, let small = Self.widgetArt(from: picture),
+                  let jpeg = small.jpegData(compressionQuality: 0.85),
+                  let artURL = AuvyNowPlayingStore.artURL else { return }
+            let tint = Self.coverTint(of: small)
+            DispatchQueue.main.async {
+                // Only if the song hasn't changed again while this was fetching.
+                guard self?.widgetArtSource == image else { return }
+                try? jpeg.write(to: artURL, options: .atomic)
+                var latest = AuvyNowPlayingStore.load()
+                latest.tint = tint
+                latest.artVersion += 1
+                AuvyNowPlayingStore.save(latest)
+                self?.reloadWidgets()
+            }
+        }
+    }
+
+    private func reloadWidgets() {
+        WidgetCenter.shared.reloadAllTimelines()
+        if #available(iOS 18.0, *) {
+            ControlCenter.shared.reloadAllControls()
+        }
+    }
+
+    /// The cover, square and 300 px: enough for the largest widget, small enough
+    /// for a widget's tight memory limit.
+    private static func widgetArt(from image: UIImage) -> UIImage? {
+        let side = min(image.size.width, image.size.height)
+        guard side > 0 else { return nil }
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        return UIGraphicsImageRenderer(size: CGSize(width: 300, height: 300), format: format).image { _ in
+            let scale = 300 / side
+            let drawn = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+            image.draw(in: CGRect(x: (300 - drawn.width) / 2, y: (300 - drawn.height) / 2,
+                                  width: drawn.width, height: drawn.height))
+        }
+    }
+
+    /// The cover's colour, darkened for the card behind white text, the same as
+    /// Android's widget (PlayerWidgetProvider.coverTint): averaged, then held to
+    /// a dark, moderately saturated shade.
+    private static func coverTint(of image: UIImage) -> UInt32? {
+        guard let cg = image.cgImage else { return nil }
+        var pixel = [UInt8](repeating: 0, count: 4)
+        guard let ctx = CGContext(data: &pixel, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                                  space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        ctx.interpolationQuality = .medium
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+        var hue: CGFloat = 0, saturation: CGFloat = 0, brightness: CGFloat = 0, alpha: CGFloat = 0
+        UIColor(red: CGFloat(pixel[0]) / 255, green: CGFloat(pixel[1]) / 255,
+                blue: CGFloat(pixel[2]) / 255, alpha: 1)
+            .getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha)
+        let dark = UIColor(hue: hue, saturation: min(max(saturation, 0.15), 0.65), brightness: 0.26, alpha: 1)
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0
+        dark.getRed(&r, green: &g, blue: &b, alpha: &alpha)
+        return (UInt32(r * 255) << 16) | (UInt32(g * 255) << 8) | UInt32(b * 255)
     }
 
     // MARK: Audio capture
@@ -469,6 +563,87 @@ final class AuvySystemChannels: NSObject {
     /// these and nothing else.
     private static let signingReminderPrefix = "auvy.signing."
 
+    /// The reminder's notification category, which carries an "I've refreshed"
+    /// button, and that button's id.
+    static let signingCategory = "auvy.signing"
+    static let signingRefreshedAction = "auvy.signing.refreshed"
+
+    /// SideStore's refresh only installs a new provisioning profile into iOS; it
+    /// never touches the app's files (see its RefreshAppOperation), so the
+    /// `embedded.mobileprovision` read below keeps the ORIGINAL date and no iOS
+    /// API reveals the new one. Auvy is told instead: "I've refreshed", from the
+    /// app or the notification, is stored here so either side can read it.
+    private static let refreshedKey = "auvy.signing.refreshedAtMs"
+    /// The scheduled reminders as offsets before the expiry, plus the profile's
+    /// length, so the notification button can reschedule without Dart running.
+    private static let planKey = "auvy.signing.plan"
+    private static let lengthKey = "auvy.signing.lengthMs"
+
+    static func registerSigningCategory() {
+        let refreshed = UNNotificationAction(
+            identifier: signingRefreshedAction, title: "I've refreshed", options: [])
+        UNUserNotificationCenter.current().setNotificationCategories([
+            UNNotificationCategory(identifier: signingCategory, actions: [refreshed],
+                                   intentIdentifiers: [], options: [])
+        ])
+    }
+
+    /// Replaces every pending and delivered reminder with [items] (those still
+    /// ahead). Shared by the app's "schedule" call and the notification button.
+    static func replaceSigningReminders(
+        _ items: [(id: String, at: Date, title: String, body: String)],
+        completion: @escaping (Int) -> Void
+    ) {
+        let center = UNUserNotificationCenter.current()
+        let prefix = signingReminderPrefix
+        center.getPendingNotificationRequests { pending in
+            center.removePendingNotificationRequests(
+                withIdentifiers: pending.map(\.identifier).filter { $0.hasPrefix(prefix) })
+            center.getDeliveredNotifications { delivered in
+                center.removeDeliveredNotifications(
+                    withIdentifiers: delivered.map(\.request.identifier).filter { $0.hasPrefix(prefix) })
+                var added = 0
+                for item in items {
+                    // Already due: the in-app card says it instead.
+                    let interval = item.at.timeIntervalSinceNow
+                    guard interval > 1 else { continue }
+                    let content = UNMutableNotificationContent()
+                    content.title = item.title
+                    content.body = item.body
+                    content.sound = .default
+                    content.categoryIdentifier = signingCategory
+                    center.add(UNNotificationRequest(
+                        identifier: prefix + item.id, content: content,
+                        trigger: UNTimeIntervalNotificationTrigger(timeInterval: interval, repeats: false)))
+                    added += 1
+                }
+                completion(added)
+            }
+        }
+    }
+
+    /// Records a refresh now, and, from the notification button, reschedules the
+    /// saved plan against the new expiry (now + the profile's length).
+    static func signingRefreshed(reschedule: Bool, completion: @escaping () -> Void) {
+        let now = Date()
+        let defaults = UserDefaults.standard
+        defaults.set(Int64(now.timeIntervalSince1970 * 1000), forKey: refreshedKey)
+        guard reschedule,
+              let plan = defaults.array(forKey: planKey) as? [[String: Any]],
+              let lengthMs = (defaults.object(forKey: lengthKey) as? NSNumber)?.doubleValue,
+              lengthMs > 0
+        else { completion(); return }
+        let expires = now.addingTimeInterval(lengthMs / 1000)
+        let items: [(id: String, at: Date, title: String, body: String)] = plan.compactMap {
+            guard let id = $0["id"] as? String,
+                  let offsetMs = ($0["offsetMs"] as? NSNumber)?.doubleValue,
+                  let title = $0["title"] as? String,
+                  let body = $0["body"] as? String else { return nil }
+            return (id, expires.addingTimeInterval(-offsetMs / 1000), title, body)
+        }
+        replaceSigningReminders(items) { _ in completion() }
+    }
+
     /// When this install stops opening: the ExpirationDate of the provisioning
     /// profile it was signed with (7 days after signing on a free Apple ID).
     /// SideStore writes a new profile on every refresh, so each launch reads the
@@ -498,7 +673,18 @@ final class AuvySystemChannels: NSObject {
             if let created = dates.created {
                 out["createdMs"] = Int64(created.timeIntervalSince1970 * 1000)
             }
+            if let refreshed = UserDefaults.standard.object(
+                forKey: AuvySystemChannels.refreshedKey) as? NSNumber {
+                out["refreshedMs"] = refreshed.int64Value
+            }
             result(out)
+        case "markRefreshed":
+            AuvySystemChannels.signingRefreshed(reschedule: false) {
+                DispatchQueue.main.async {
+                    result((UserDefaults.standard.object(
+                        forKey: AuvySystemChannels.refreshedKey) as? NSNumber)?.int64Value)
+                }
+            }
         case "permission":
             center.getNotificationSettings { settings in
                 let status: String
@@ -517,34 +703,28 @@ final class AuvySystemChannels: NSObject {
             // Replaces every reminder from an earlier launch: a refresh moves the
             // expiry, and the old ones would warn about a date that no longer
             // holds. Delivered ones go too, since the app is open to say it now.
-            let items = (call.arguments as? [String: Any])?["reminders"] as? [[String: Any]] ?? []
-            center.getPendingNotificationRequests { pending in
-                center.removePendingNotificationRequests(
-                    withIdentifiers: pending.map(\.identifier).filter { $0.hasPrefix(prefix) })
-                center.getDeliveredNotifications { delivered in
-                    center.removeDeliveredNotifications(
-                        withIdentifiers: delivered.map(\.request.identifier).filter { $0.hasPrefix(prefix) })
-                    let now = Date().timeIntervalSince1970
-                    var added = 0
-                    for item in items {
-                        guard let id = item["id"] as? String,
-                              let atMs = (item["atMs"] as? NSNumber)?.doubleValue,
-                              let title = item["title"] as? String,
-                              let body = item["body"] as? String else { continue }
-                        // Already due: the in-app card says it instead.
-                        let interval = atMs / 1000 - now
-                        guard interval > 1 else { continue }
-                        let content = UNMutableNotificationContent()
-                        content.title = title
-                        content.body = body
-                        content.sound = .default
-                        center.add(UNNotificationRequest(
-                            identifier: prefix + id, content: content,
-                            trigger: UNTimeIntervalNotificationTrigger(timeInterval: interval, repeats: false)))
-                        added += 1
-                    }
-                    DispatchQueue.main.async { result(added) }
+            let args = call.arguments as? [String: Any] ?? [:]
+            let raw = args["reminders"] as? [[String: Any]] ?? []
+            let items: [(id: String, at: Date, title: String, body: String)] = raw.compactMap {
+                guard let id = $0["id"] as? String,
+                      let atMs = ($0["atMs"] as? NSNumber)?.doubleValue,
+                      let title = $0["title"] as? String,
+                      let body = $0["body"] as? String else { return nil }
+                return (id, Date(timeIntervalSince1970: atMs / 1000), title, body)
+            }
+            // Kept as offsets before the expiry, so the notification button can
+            // reschedule after a refresh with Auvy closed.
+            if let expiresMs = (args["expiresMs"] as? NSNumber)?.doubleValue,
+               let lengthMs = (args["lengthMs"] as? NSNumber)?.doubleValue {
+                let plan: [[String: Any]] = items.map {
+                    ["id": $0.id, "offsetMs": expiresMs - $0.at.timeIntervalSince1970 * 1000,
+                     "title": $0.title, "body": $0.body]
                 }
+                UserDefaults.standard.set(plan, forKey: AuvySystemChannels.planKey)
+                UserDefaults.standard.set(lengthMs, forKey: AuvySystemChannels.lengthKey)
+            }
+            AuvySystemChannels.replaceSigningReminders(items) { added in
+                DispatchQueue.main.async { result(added) }
             }
         case "cancel":
             center.getPendingNotificationRequests { pending in
@@ -756,6 +936,12 @@ final class AuvyNotificationDelegate: NSObject, UNUserNotificationCenterDelegate
         if response.notification.request.identifier.hasPrefix(AuvyWhatsNew.notePrefix) {
             AuvyWhatsNew.notificationTapped()
         }
+        // "I've refreshed" on a refresh reminder: recorded and rescheduled here,
+        // so it works with Auvy closed (iOS launches it in the background).
+        if response.actionIdentifier == AuvySystemChannels.signingRefreshedAction {
+            AuvySystemChannels.signingRefreshed(reschedule: true) { completionHandler() }
+            return
+        }
         if !response.notification.request.identifier.hasPrefix("auvy."),
            let previous = previous,
            previous.responds(to: #selector(UNUserNotificationCenterDelegate
@@ -861,7 +1047,15 @@ final class AuvyWhatsNew {
 /// whats_new_logic.dart, posts notifications, and leaves what it found in
 /// whats_new/bg.json for the app to take in.
 enum AuvyWhatsNewBackground {
-    static let taskId = "com.auvy.app.whatsnew"
+    /// The task's identifier as THIS install lists it. SideStore renames the app
+    /// for the installing Apple ID ("com.auvy.app.<team>") and rewrites the
+    /// permitted task identifiers in Info.plist to match, so a fixed
+    /// "com.auvy.app.whatsnew" is refused by iOS on every SideStore install and
+    /// the check never runs. Read back from Info.plist instead.
+    static let taskId: String = {
+        let listed = Bundle.main.object(forInfoDictionaryKey: "BGTaskSchedulerPermittedIdentifiers") as? [String] ?? []
+        return listed.first { $0.hasSuffix(".whatsnew") } ?? "com.auvy.app.whatsnew"
+    }()
 
     /// Called from didFinishLaunching: iOS requires the handler before launch ends.
     static func register() {

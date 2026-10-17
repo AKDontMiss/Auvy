@@ -1,0 +1,5 @@
+// The widget's build settings on top of the project's. Only Flutter's generated
+// file is included (for the version, so the widget always carries the app's),
+// NOT Flutter/Release.xcconfig: that also pulls in the CocoaPods settings, which
+// would link Flutter and every plugin into the extension.
+#include? "../Flutter/Generated.xcconfig"

@@ -457,6 +457,7 @@ extension PlayerQueueController on PlayerNotifier {
   }
 
   Future<void> playNext({bool autoAdvance = false, bool alreadyPlayingNatively = false}) async {
+    if (autoAdvance) _lastAutoAdvanceAtMs = DateTime.now().millisecondsSinceEpoch;
     if (_navIndex > 0) {
       if (!autoAdvance) {
         HapticService.light();

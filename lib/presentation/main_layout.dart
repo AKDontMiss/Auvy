@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:io' show Platform;
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:auvy/presentation/widgets/undo_toast.dart';
 import 'package:auvy/providers/download_provider.dart'; 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -17,6 +19,7 @@ import 'package:auvy/presentation/widgets/song_recognition_sheet.dart';
 import 'package:auvy/presentation/widgets/content_menus.dart';
 import 'package:auvy/presentation/widgets/connection_banner.dart';
 import 'package:auvy/presentation/pages/album_page.dart';
+import 'package:auvy/presentation/pages/playlist_page.dart';
 import 'package:auvy/providers/search_provider.dart';
 import 'package:flutter/services.dart';
 import 'package:audio_service/audio_service.dart';
@@ -50,6 +53,9 @@ import 'package:auvy/providers/intelligence_provider.dart';
 import 'package:auvy/data/dummy_data.dart';
 import 'package:auvy/core/app_navigation.dart';
 import 'package:auvy/core/app_colors.dart';
+import 'package:auvy/logic/music_link.dart';
+import 'package:auvy/presentation/widgets/open_link_sheet.dart';
+import 'package:auvy/services/app_commands.dart';
 
 class MainLayout extends ConsumerStatefulWidget {
   const MainLayout({super.key});
@@ -75,7 +81,7 @@ class MainLayout extends ConsumerStatefulWidget {
       // Settings) has only MainLayout beneath, so it must be opaque, or the page below
       // shows through once the transition settles.
       opaque: opaque,
-      pageBuilder: (context, animation, secondaryAnimation) => page,
+      pageBuilder: (context, animation, secondaryAnimation) => _RootEdgeSwipeBack(child: page),
       // HYDRV's durations, verbatim: 180ms in, 160ms out. The reverse of a push
       // is a pop, so `reverseTransitionDuration` gets the exit timing.
       transitionDuration: HydrvMotion.enterDuration,
@@ -214,6 +220,9 @@ class _MainLayoutState extends ConsumerState<MainLayout>
       // What's New: a notification tap opens the page; checks start a little
       // after launch so they never compete with the first screen.
       CloudSyncService.onHeld = _onBackupHeld;
+      // Links shared into Auvy and "open Search" from the icon's shortcuts.
+      AppCommands.attachScreen(_runScreenCommand);
+      _maybeOfferCopiedLink();
       WhatsNewNotifier.attachChannel();
       WhatsNewNotifier.onOpenRequested = _maybeOpenWhatsNew;
       _maybeOpenWhatsNew();
@@ -235,6 +244,7 @@ class _MainLayoutState extends ConsumerState<MainLayout>
       WhatsNewNotifier.onOpenRequested = null;
     }
     if (CloudSyncService.onHeld == _onBackupHeld) CloudSyncService.onHeld = null;
+    AppCommands.detachScreen(_runScreenCommand);
     CoachTour.armedSignal.removeListener(_maybeStartTour);
     accessRevokedProvider.removeListener(_onRevokedSignal);
     _notificationSubscription?.cancel();
@@ -317,6 +327,7 @@ class _MainLayoutState extends ConsumerState<MainLayout>
         ..refreshPermission()
         ..maybeCheck();
       _catchUpWithOtherDevices();
+      _maybeOfferCopiedLink();
     } else if (state == AppLifecycleState.paused || state == AppLifecycleState.hidden) {
       // The position is saved every 15-30 s while playing; leaving the app saves
       // it exactly, in case the system ends the process.
@@ -436,6 +447,113 @@ class _MainLayoutState extends ConsumerState<MainLayout>
   }
 
   void _onBackupHeld() => _catchUpWithOtherDevices(held: true);
+
+  /// The commands that need a screen (see AppCommands): a link shared or opened
+  /// into Auvy, and the icon shortcut that opens Search.
+  Future<String?> _runScreenCommand(String name, Map<String, dynamic> args) async {
+    if (!mounted) return null;
+    switch (name) {
+      case 'openLink':
+        final link = MusicLink.find((args['url'] ?? '').toString());
+        if (link == null) {
+          AnimatedToast.message("That isn't a Spotify, Apple Music or YouTube link");
+          return null;
+        }
+        // Over the player page too, if it's open: the sheet is on the root navigator.
+        showOpenLinkSheet(context, link);
+        return null;
+      case 'openSearch':
+        _userChoseTab = true;
+        setState(() => _selectedIndex = 1);
+        return null;
+      case 'openNowPlaying':
+        _openNowPlayingSource();
+        return null;
+    }
+    return null;
+  }
+
+  /// The copy already offered (or declined), so one link is offered once.
+  int? _offeredClipboardCopy;
+
+  /// "Share → Copy Link" in Spotify, then Auvy: offers to open what was copied.
+  /// iOS has no way for a free app into another app's share sheet (that needs a
+  /// share extension, a fourth app on a free Apple ID), so this is the route on
+  /// iPhone; Android also gets "Share → Auvy". The clipboard is only READ when
+  /// the listener taps Open (iOS may ask to allow pasting once).
+  Future<void> _maybeOfferCopiedLink() async {
+    final hint = await AppCommands.clipboardHint();
+    if (hint == null || !hint.hasUrl || !mounted) return;
+    final prefs = await SharedPreferences.getInstance();
+    final seen = _offeredClipboardCopy ?? prefs.getInt('auvy_clipboard_offered');
+    if (hint.changeCount == seen) return;
+    _offeredClipboardCopy = hint.changeCount;
+    await prefs.setInt('auvy_clipboard_offered', hint.changeCount);
+    if (!mounted) return;
+    UndoToast.show(
+      context,
+      text: 'Open the link you copied?',
+      icon: Icons.link_rounded,
+      actionLabel: 'Open',
+      actionIcon: Icons.open_in_new_rounded,
+      duration: const Duration(seconds: 8),
+      onUndo: () async {
+        final data = await Clipboard.getData(Clipboard.kTextPlain);
+        if (!mounted) return;
+        final link = MusicLink.find(data?.text ?? '');
+        if (link == null) {
+          AnimatedToast.message("That isn't a Spotify, Apple Music or YouTube link");
+          return;
+        }
+        showOpenLinkSheet(context, link);
+      },
+    );
+  }
+
+  /// The widget's song was tapped: open the playlist it's playing from, or,
+  /// when it isn't playing from one of the library's playlists, its album. The
+  /// player page as a last resort (radio, a podcast, nothing to show).
+  void _openNowPlayingSource() {
+    final state = ref.read(playerProvider);
+    final song = state.currentSong;
+    if (song == null || !mounted) return;
+    // On top of the player page the new page would be hidden; close it first.
+    if (AppNavigation.isPlayerOpen) Navigator.of(context).maybePop();
+
+    // Matched by name, not only when the context says "playlist": skipping
+    // within a list keeps "Liked Songs" as where it plays from (locationName)
+    // but drops the context type (seen on device, 2026-10-15). An album or
+    // artist context goes to the album below.
+    if (state.contextType != 'album' && state.contextType != 'artist') {
+      final lib = ref.read(libraryProvider);
+      final wanted = {state.contextId, state.contextTitle, state.locationName}
+          .whereType<String>()
+          .map((s) => s.toLowerCase().trim())
+          .where((s) => s.isNotEmpty)
+          .toSet();
+      for (final item in lib.allItems) {
+        // The same rule the library page opens by: Liked Songs and My Top 50
+        // are stored as folders, not playlists, and open the playlist page.
+        final opensAsPlaylist = item.category == LibraryCategory.playlist ||
+            item.title == 'Liked Songs' ||
+            item.title == 'My Top 50';
+        if (opensAsPlaylist && wanted.contains(item.title.toLowerCase().trim())) {
+          AppNavigation.pushOnActiveTab(PlaylistPage(libraryPlaylist: item),
+              name: AppNavigation.playlistTag(item.title));
+          return;
+        }
+      }
+    }
+    if (song.albumId.isNotEmpty || song.albumTitle.isNotEmpty) {
+      final album = ContentMenus.buildAlbumForSong(song);
+      AppNavigation.pushOnActiveTab(
+        AlbumPage(album: album, artistName: song.artist, fallbackTrack: song),
+        name: AppNavigation.albumTag(album),
+      );
+      return;
+    }
+    _navigateToPlayer();
+  }
 
   /// Opened by tapping a What's New notification (read-and-clear natively, so
   /// it opens once).
@@ -1085,3 +1203,40 @@ class _MainLayoutState extends ConsumerState<MainLayout>
     ));
   }
 }
+
+/// iOS's left-edge swipe back for pages above the tabs (Settings, its
+/// sub-pages, About). MainLayout's own strip (see _withIosBackGesture) sits
+/// over the tab navigators, so a page pushed on the root navigator above it
+/// never received it: Settings ignored the swipe every other page answers.
+/// Same strip and the same rightward-flick rule; on a tab page this does
+/// nothing, and the tab strip keeps handling it.
+class _RootEdgeSwipeBack extends StatelessWidget {
+  const _RootEdgeSwipeBack({required this.child});
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    if (kIsWeb || !Platform.isIOS) return child;
+    final nav = Navigator.maybeOf(context);
+    final root = Navigator.maybeOf(context, rootNavigator: true);
+    if (nav == null || !identical(nav, root)) return child;
+    return Stack(
+      children: [
+        child,
+        Positioned(
+          left: 0,
+          top: 0,
+          bottom: 0,
+          width: 22,
+          child: GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onHorizontalDragEnd: (details) {
+              if ((details.primaryVelocity ?? 0) > 150) nav.maybePop();
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}
+

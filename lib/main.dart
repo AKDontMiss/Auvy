@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io' show Platform;
+import 'package:auvy/core/large_prefs_store.dart';
 import 'package:auvy/services/catalog_api_client.dart';
 import 'dart:ui' show PlatformDispatcher;
 import 'package:auvy/services/activity_log.dart';
@@ -55,9 +56,17 @@ void main() {
     () async {
       WidgetsFlutterBinding.ensureInitialized();
 
+      // iPhone: large preference values (the library, taste data, history) go to
+      // files, out of iOS's 4 MB settings store. Before anything reads a
+      // preference, because SharedPreferences caches its first read. See
+      // LargePrefsStore.
+      await LargePrefsStore.install();
+
       // Start the activity log first, so startup problems are captured. Recording
       // stays off unless the user enabled it.
       await ActivityLog.instance.init();
+      final prefsNote = LargePrefsStore.startupNote;
+      if (prefsNote != null) print(prefsNote);
       await DeviceInfoService.init();
       await ContainerPathResolver.ensureInitialized();
 
@@ -110,6 +119,16 @@ void main() {
           print('Ignored benign framework race: ink renderer got scroll-end after pop');
           return true;
         }
+        // Into the activity log as well: the engine's own report goes only to
+        // the system log (the Xcode console on iPhone), so an exported log would
+        // otherwise show no trace of it.
+        final top = stack
+            .toString()
+            .split('\n')
+            .where((l) => l.trim().isNotEmpty)
+            .take(5)
+            .join(' | ');
+        print('ERROR: uncaught — $msg @ $top');
         return false; // not handled — normal crash reporting continues
       };
 

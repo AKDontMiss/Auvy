@@ -9,11 +9,13 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:auvy/services/set_log.dart';
 import 'package:auvy/services/play_tally.dart';
+import 'package:auvy/services/play_devices.dart';
 import 'package:crypto/crypto.dart';
 import 'package:encrypt/encrypt.dart' as enc;
 import 'package:flutter/foundation.dart' show compute, visibleForTesting;
 import 'package:auvy/services/device_info_service.dart';
 
+import 'package:auvy/logic/library_integrity.dart';
 import 'package:auvy/logic/library_sync_split.dart';
 import 'package:auvy/logic/stall_watchdog.dart';
 
@@ -97,9 +99,33 @@ class CloudSyncService {
   /// doesn't wipe, so genuine unpushed work is still protected.
   bool _accountResetting = false;
 
+  /// Bumped by every account wipe. A restore or push that began before one
+  /// must not write after it: seen 2026-10-17, a catch-up started by a held
+  /// push finished after the sign-out wipe, wrote "up to date with the cloud"
+  /// onto the emptied phone (and closed the wipe's window early), so the
+  /// sign-in restore that followed fetched nothing, and the empty library then
+  /// went up over the backup.
+  int _resetEpoch = 0;
+
   /// Called at the START of an account wipe, before anything can re-dirty prefs.
   void beginAccountReset() {
+    _resetEpoch++;
     _accountResetting = true;
+    // What this process remembers of the cloud describes the data being wiped:
+    // kept, a sign-in after it compared the emptied phone with the old
+    // library's records (the wipe removes the saved ones; see
+    // AccountNotifier._userDataPrefixes).
+    _pushedSig.clear();
+    _cloudPartCounts = {};
+    _cloudPartGens = {};
+    _cloudPartLayout = {};
+    _partCountsLoaded = false;
+    _knownCloudMs = 0;
+    _needsRemoteMergeBeforePush = false;
+    // The wipe removes the saved shard id (a shard is per account and device);
+    // the copy in memory has to go with it, or this process keeps using an id
+    // the next launch no longer knows, and the phone ends up with two.
+    _shardId = null;
     _debounce?.cancel();
     _debounce = null;
     logEvent('cloud: account reset window OPEN — local writes from here are the '
@@ -169,6 +195,13 @@ class CloudSyncService {
   /// held changes go up. Without it, two phones both left open stayed apart
   /// until one was reopened.
   static void Function()? onHeld;
+
+  /// Whether the latest restore was this device's first for the account (a
+  /// fresh install or a new sign-in: no watermark yet). Only then was the home
+  /// feed built from an empty taste profile and worth rebuilding; rebuilding it
+  /// after every restore refetched the whole feed each time another phone had
+  /// pushed (seen 2026-10-16, five times in an evening).
+  bool lastRestoreWasFirst = false;
 
   /// This device's sync id for the signed-in account (its history shard id).
   Future<String> deviceId() => _deviceShardId();
@@ -292,6 +325,11 @@ class CloudSyncService {
   /// algorithm are meaningless. (v2: _sig no longer uses the per-process-seeded
   /// `Object.hash`.)
   static const String _kPushedSigPrefix = 'cloud_pushed_sigs_v2_';
+
+  /// For the account wipe, which removes these records with the data they
+  /// describe (see beginAccountReset).
+  static const String pushedSigPrefix = _kPushedSigPrefix;
+  static const String appliedGensPrefix = _kAppliedGensPrefix;
   String get _pushedSigKey => '$_kPushedSigPrefix$_userId';
 
   /// Which key the persisted signatures were written under. After the server
@@ -299,6 +337,103 @@ class CloudSyncService {
   /// nothing would be re-uploaded and the backup would stay sealed under the old
   /// key. A changed key id triggers exactly one full re-upload.
   String get _pushedSigKeyIdKey => '$_kPushedSigPrefix${_userId}_keyid';
+
+  /// key → the cloud generation of that blob that this device's local copy
+  /// already holds: it restored that generation, or uploaded it. A restore
+  /// fetches only blobs whose manifest generation differs (see
+  /// [keysNeedingFetch]), instead of every blob every time: seen 2026-10-16,
+  /// each restore read all 67 blobs (70+ Firestore reads, ~1 MB) when the other
+  /// phone had changed two or three, and the free daily read quota is shared
+  /// by every user of the app.
+  ///
+  /// Saved with the local watermark ([_localMarkerKey]) it belongs to. Any
+  /// mismatch (a local wipe, a crash between the two writes, an older build)
+  /// makes it count as empty, so that restore fetches everything, as restores
+  /// always did. Scoped by uid like the push signatures.
+  static const String _kAppliedGensPrefix = 'cloud_applied_gens_v1_';
+  String get _appliedGensKey => '$_kAppliedGensPrefix$_userId';
+
+  Map<String, int> _loadAppliedGens(SharedPreferences prefs) {
+    try {
+      final raw = prefs.getString(_appliedGensKey);
+      if (raw == null || raw.isEmpty) return {};
+      final d = jsonDecode(raw);
+      if (d is! Map) return {};
+      final marker = prefs.getInt(_localMarkerKey) ?? 0;
+      if (marker == 0 || d['m'] != marker) return {};
+      final g = d['g'];
+      if (g is! Map) return {};
+      return {
+        for (final e in g.entries)
+          if (e.value is int) e.key.toString(): e.value as int,
+      };
+    } catch (_) {
+      return {};
+    }
+  }
+
+  Future<void> _saveAppliedGens(SharedPreferences prefs, Map<String, int> gens, int marker) async {
+    try {
+      await prefs.setString(_appliedGensKey, jsonEncode({'m': marker, 'g': gens}));
+    } catch (_) {}
+  }
+
+  /// Which of [keys] a restore must fetch: those with no generation in the
+  /// manifest (written before generations existed), those whose generation
+  /// isn't the one this device holds, and those with no local copy at all.
+  @visibleForTesting
+  static List<String> keysNeedingFetch(Iterable<String> keys, Map<String, int> cloudGens,
+      Map<String, int> applied, bool Function(String key) hasLocal) {
+    return [
+      for (final k in keys)
+        if (cloudGens[k] == null || applied[k] != cloudGens[k] || !hasLocal(k)) k,
+    ];
+  }
+
+  /// Which library parts a restore must fetch, and which come from this
+  /// device's own copy. The library is rebuilt from ALL its parts (see
+  /// joinLibrary), so an unchanged part must still be present: it is taken from
+  /// [localParts]. If any unchanged part is missing there (an unreadable local
+  /// library), every part is fetched, as restores always did. [skip] when
+  /// nothing changed: the local library stands as it is.
+  @visibleForTesting
+  static ({List<String> fetch, Map<String, String> fromLocal, bool skip}) planLibraryParts(
+      List<String> cloudKeys, Map<String, int> cloudGens, Map<String, int> applied,
+      Map<String, String> localParts) {
+    final changed = keysNeedingFetch(cloudKeys, cloudGens, applied, localParts.containsKey);
+    if (changed.isEmpty) return (fetch: const [], fromLocal: const {}, skip: true);
+    final unchanged = cloudKeys.where((k) => !changed.contains(k)).toList();
+    if (unchanged.any((k) => !localParts.containsKey(k))) {
+      return (fetch: List.of(cloudKeys), fromLocal: const {}, skip: false);
+    }
+    return (fetch: changed, fromLocal: {for (final k in unchanged) k: localParts[k]!}, skip: false);
+  }
+
+  /// What this device holds after a push that wrote [gens] (the new manifest):
+  /// every blob this push uploaded ([pushGen]), plus earlier entries the
+  /// manifest still carries unchanged. A carried blob this device never held
+  /// (another device's parts) gets no entry, so it is still fetched later.
+  @visibleForTesting
+  static Map<String, int> appliedAfterPush(Map<String, int> previous, Map<String, int> gens, int pushGen) => {
+        for (final e in previous.entries)
+          if (gens[e.key] == e.value) e.key: e.value,
+        for (final e in gens.entries)
+          if (e.value == pushGen) e.key: pushGen,
+      };
+
+  /// What this device holds after a restore: earlier entries for blobs whose
+  /// generation hasn't moved, plus the blobs it just took from the cloud
+  /// ([taken]). A blob that was fetched but not taken (torn, refused, kept
+  /// local) loses its entry, so it is fetched again next time.
+  @visibleForTesting
+  static Map<String, int> appliedAfterRestore(Map<String, int> previous, Map<String, int> cloudGens,
+          Map<String, int> cloudCounts, Iterable<String> taken) =>
+      {
+        for (final e in previous.entries)
+          if ((cloudCounts[e.key] ?? 0) > 0 && cloudGens[e.key] == e.value) e.key: e.value,
+        for (final k in taken)
+          if (cloudGens[k] != null) k: cloudGens[k]!,
+      };
 
   /// Read the persisted signatures for this user into [_pushedSig].
   Future<void> _loadPushedSigs(SharedPreferences prefs) async {
@@ -383,6 +518,26 @@ class CloudSyncService {
   /// device on the account needs a build that has it.
   static const String _encMarkerV3 = 'enc:v3:';
 
+  /// Whether the v3 envelope comes out shorter than v2 for [plain], the encoder's
+  /// own choice (see _encodeChunk): same prefix length, so it comes down to
+  /// base64 of the GCM ciphertext (plus its 16-byte tag) of the gzipped bytes
+  /// against that of the plain UTF-8.
+  @visibleForTesting
+  static bool compressedIsSmaller(String plain) {
+    final bytes = utf8.encode(plain);
+    final packed = gzip.encode(bytes).length;
+    int b64(int n) => 4 * ((n + 16 + 2) ~/ 3);
+    return b64(packed) < b64(bytes.length);
+  }
+
+  /// The envelope the push would store for [plain] under [keyBytes], joined
+  /// from its parts: lets a test hold [compressedIsSmaller] to the encoder.
+  @visibleForTesting
+  static String encodeForTest(String plain, List<int> keyBytes, String blobKey) =>
+      _encodeAndChunkIsolate(
+              _EncodeRequest(plain, keyBytes, blobKey, _computeKeyId(keyBytes)))
+          .join();
+
   /// Short id for the current key: the first 8 hex characters of its SHA-256.
   /// Derived from the key (the service issues no version), so a changed server
   /// secret produces a new id automatically. 32 bits: a label for telling keys
@@ -446,9 +601,44 @@ class CloudSyncService {
     }
   }
 
-  // Encryption and decryption both run in a background isolate (see
-  // [_encodeAndChunkIsolate] at the bottom and [_decodeAllOffThread]); there is no
-  // main-isolate path for either.
+  // Encryption and decryption of the BACKUP run in a background isolate (see
+  // [_encodeAndChunkIsolate] at the bottom and [_decodeAllOffThread]). The two
+  // below are for small values only, where an isolate would cost more than the
+  // work.
+
+  /// Seals a small value for another per-account feature (the live device list)
+  /// with the backup's key: the same v2 envelope, AES-GCM with a fresh nonce,
+  /// bound to [slot] so a sealed value can't be moved into another slot. Null
+  /// when there is no key; the caller then stores nothing rather than plaintext.
+  String? sealSmall(String slot, String plain) {
+    final e = _encrypter;
+    final id = _keyId;
+    if (e == null || id == null) return null;
+    try {
+      final iv = enc.IV.fromSecureRandom(12);
+      return '$_encMarkerV2$id:${iv.base64}:'
+          '${e.encrypt(plain, iv: iv, associatedData: aadFor(slot)).base64}';
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Opens what [sealSmall] sealed into [slot]. Null for anything that doesn't
+  /// authenticate: another key, another slot, tampered, or not sealed at all.
+  String? openSmall(String slot, Object? sealed) {
+    final e = _encrypter;
+    if (e == null || sealed is! String || !sealed.startsWith(_encMarkerV2)) return null;
+    try {
+      final rest = sealed.substring(_encMarkerV2.length);
+      final idEnd = rest.indexOf(':');
+      final ivEnd = rest.indexOf(':', idEnd + 1);
+      if (idEnd < 0 || ivEnd < 0 || rest.substring(0, idEnd) != _keyId) return null;
+      return e.decrypt(enc.Encrypted.fromBase64(rest.substring(ivEnd + 1)),
+          iv: enc.IV.fromBase64(rest.substring(idEnd + 1, ivEnd)), associatedData: aadFor(slot));
+    } catch (_) {
+      return null;
+    }
+  }
 
   /// The AES key as raw bytes, kept so the encode can run in another isolate.
   ///
@@ -596,11 +786,70 @@ class CloudSyncService {
     // Songs identified by listening. The one list a user can't rebuild, since it
     // records moments. Capped at 100 entries (RecognitionHistory._maxEntries).
     'auvy_recognition_history',
+    // The player's look, like the rest of Appearance (added 2026-10-16; these
+    // four were the only Appearance choices that didn't follow the account).
+    'auvy_player_bg_style', // blurred / black / radial / aurora
+    'auvy_artwork_glow_mode', // the light around the player cover
+    'auvy_controls_color_mode', // what colour the player controls take
+    // How the library sorts the user's own playlists and albums (added
+    // 2026-10-17; library_provider's kLibrarySortKey).
+    'library_sort_v1',
     // Not backed up on purpose: `auvy_alarm_track_path` and its id/title/artist
     // siblings describe a file in this install's private storage. The alarm
     // prepares its own audio again on the next resume (see
     // AlarmService.needsPreparation).
   ];
+  /// The text-valued keys that are SETTINGS (the rest of [_stringKeys] is data:
+  /// the library, history, taste). A restore keeps one changed here since this
+  /// device's last push, like a numeric setting (see applyScalar), rather than
+  /// putting the other device's older choice over it.
+  @visibleForTesting
+  static const Set<String> stringSettingKeys = {
+    'auvy_update_skipped_tag',
+    'mini_player_style_name',
+    'slider_style_name',
+    'auvy_romanize_kana_system',
+    'auvy_romanize_hangul_system',
+    'auvy_romanize_cyrillic_system',
+    'auvy_content_country',
+    'auvy_content_language',
+    'app_density_name',
+    'auvy_app_icon_variant',
+    'auvy_alarm_source',
+    'auvy_alarm_picked_collection',
+    'auvy_alarm_background',
+    'auvy_alarm_picked_song',
+    'auvy_player_bg_style',
+    'auvy_artwork_glow_mode',
+    'auvy_controls_color_mode',
+    'library_sort_v1',
+  };
+
+  /// Whether a blob's local value moved since this device last pushed (or took)
+  /// it. A blob never pushed from here counts as changed, as in the merge rule
+  /// ([blobChangedSinceLastPush]): it is never overwritten by a merge.
+  @visibleForTesting
+  static bool localChangedSincePush(int? base, String? local) =>
+      local != null && (base == null || base != _sig(local));
+
+  /// A text setting changed on this device since its last push: the numeric
+  /// rule (see settingChangedSinceLastPush), not the blob one. With no record
+  /// of a push (a fresh install, or a key an older build never sent) the cloud
+  /// value is taken, so a default saved at first launch can't beat a restore.
+  @visibleForTesting
+  static bool textSettingChangedHere(int? base, String? local, String incoming) =>
+      local != null && local != incoming && base != null && base != _sig(local);
+
+  /// Synced numbers that are by-products of listening, not settings: they
+  /// change with every song, so keeping one on a restore doesn't call for a
+  /// prompt upload (see the end of activateAndRestore).
+  @visibleForTesting
+  static const Set<String> listeningScalarKeys = {
+    'intel_last_save_time',
+    'intel_first_use_date',
+    'intel_artist_genres_v',
+  };
+
   static const List<String> _intKeys = [
     'intel_last_save_time',
     'intel_first_use_date',
@@ -612,6 +861,7 @@ class CloudSyncService {
     'data_saver_mode', // data-saver mode
     'app_theme_color', // accent / theme color
     'slider_style_index', // player slider style
+    'auvy_controls_color_custom', // the player controls' own colour (with the mode above)
     'auvy_scrobble_seconds', // how long counts as a play
     'auvy_default_open_tab', // which tab the app opens on (0/1/2)
     // The alarm's volume, fade length and snooze length, so the alarm sounds
@@ -647,6 +897,8 @@ class CloudSyncService {
   // rest are user SETTINGS restored on reinstall.
   static const List<String> _boolKeys = [
     'has_onboarded',
+    // Library list or block view (library_provider's kLibraryGridKey).
+    'library_grid_v1',
     // Settings (bools)
     'auvy_normalization', // normalize volume
     'auvy_crossfade', // crossfade on/off
@@ -677,6 +929,7 @@ class CloudSyncService {
     'auvy_alarm_fade_in',         // ramp the alarm volume up
     'auvy_alarm_pulse',           // vibrate alongside the alarm
     'auvy_allow_external_play',   // let other apps start playback
+    'auvy_ignore_earbud_bounce',  // ignore an earbud's own play after a pause
     'auvy_lyrics_centered',       // was in _doubleKeys; it is a bool
     'auvy_romanize_as_main',      // was in _doubleKeys; it is a bool
   ];
@@ -689,6 +942,11 @@ class CloudSyncService {
 
   CollectionReference<Map<String, dynamic>>? get _blobs =>
       _doc?.collection('blobs');
+
+  /// This account's private document (null until cloud sync is signed in), for
+  /// the other per-account features that live under it: the live device list
+  /// (DevicePresenceService). Covered by the same rule as the backup.
+  DocumentReference<Map<String, dynamic>>? get accountDoc => _doc;
 
   /// One document per device, merged on read instead of overwritten.
   ///
@@ -734,6 +992,61 @@ class CloudSyncService {
   /// than writing into the one the previous account used.
   static const String shardIdKey = 'cloud_shard_id';
 
+  /// The shards as read once for the current merge, shared by the history, set
+  /// and play-count merges (each used to read the whole collection itself:
+  /// three reads of every shard per launch). Set and cleared by
+  /// [_mergeShardsIntoLocal] only.
+  QuerySnapshot<Map<String, dynamic>>? _shardSnap;
+
+  Future<QuerySnapshot<Map<String, dynamic>>> _readShards(
+          CollectionReference<Map<String, dynamic>> shards) async =>
+      _shardSnap ?? await shards.get();
+
+  /// The slot a shard's sealed content is bound to: its own document, so one
+  /// device's shard can't be passed off as another's.
+  static String shardSlot(String shardId) => 'shard:v1:$shardId';
+
+  /// A shard's content. Current builds seal it with the account's key (it is
+  /// listening history, likes and play counts); an older build's plaintext
+  /// shard is still read. A sealed one that doesn't open (another key) reads as
+  /// empty, never as garbage.
+  Map<String, dynamic> _shardPayload(String shardId, Map<String, dynamic>? raw) {
+    if (raw == null) return const {};
+    final sealed = raw['sealed'];
+    if (sealed == null) return raw;
+    final opened = openSmall(shardSlot(shardId), sealed);
+    if (opened == null) return const {};
+    try {
+      final d = jsonDecode(opened);
+      return d is Map ? Map<String, dynamic>.from(d) : const {};
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  /// Per (account, device): the newest `atMs` seen on another device's shard at
+  /// the last full merge, and when that merge ran. Lets a launch with nothing
+  /// new from other devices skip reading every shard (see
+  /// [_mergeShardsIntoLocal]). Keyed by the shard id, which a wipe or an
+  /// account switch replaces, so a fresh start always merges in full.
+  static const String _kShardSeenPrefix = 'cloud_shard_seen_v1_';
+
+  /// A full merge runs at least this often regardless, as a safety net for a
+  /// change the cheap check could miss (a shard from a build that stamps no
+  /// time, say). Leeway rather than the tightest possible saving.
+  static const Duration shardFullMergeEvery = Duration(hours: 6);
+
+  /// Whether the shards must be read and merged: no record of a full merge, the
+  /// safety interval has passed, or another device's shard is newer than the
+  /// newest seen at the last one.
+  @visibleForTesting
+  static bool shardMergeNeeded({required int? seenMaxAtMs, required int? lastFullMs,
+      required int nowMs, required bool foreignNewer}) {
+    if (seenMaxAtMs == null || lastFullMs == null) return true;
+    if (nowMs - lastFullMs >= shardFullMergeEvery.inMilliseconds || nowMs < lastFullMs) return true;
+    return foreignNewer;
+  }
+
   /// Merges every device's history shard with this device's history. Returns the
   /// merged JSON, or null when nothing was added (so the caller can skip a write).
   ///
@@ -743,7 +1056,7 @@ class CloudSyncService {
     final shards = _shards;
     if (shards == null) return null;
     try {
-      final snap = await shards.get();
+      final snap = await _readShards(shards);
       // Best time seen per song id, and the record that carried it.
       final bestAt = <String, int>{};
       final bestRec = <String, Map<String, dynamic>>{};
@@ -786,8 +1099,9 @@ class CloudSyncService {
       for (final d in snap.docs) {
         if (d.id == mine) continue; // our own contribution is already local
         foreignShards++;
-        final foreignDevice = ((d.data()['deviceName'] ?? d.data()['deviceModel'] ?? '') as String).trim();
-        ingest(d.data()['history'] as String?, foreign: true, fallbackDevice: foreignDevice);
+        final p = _shardPayload(d.id, d.data());
+        final foreignDevice = ((p['deviceName'] ?? p['deviceModel'] ?? '') as String).trim();
+        ingest(p['history'] as String?, foreign: true, fallbackDevice: foreignDevice);
       }
       if (!sawForeign) {
         // Log the outcome even when nothing came from other devices, so "nothing to
@@ -819,19 +1133,41 @@ class CloudSyncService {
     try {
       final id = await _deviceShardId();
       final deviceName = DeviceInfoService.currentDeviceName;
-      await shards.doc(id).set({
+      final setLog = await SetLog.instance.exportJson();
+      final playTally = await PlayTally.instance.exportJson();
+      final plays = await PlayDevices.instance.exportOwn();
+      // Unchanged since this device last wrote it: no write. A new `atMs` would
+      // otherwise send every other device into a full merge for nothing.
+      final prefs = await SharedPreferences.getInstance();
+      final sigKey = '${_kShardSeenPrefix}pub_$_userId::$id';
+      final sig = _sig('${historyJson ?? ''}\u0000$deviceName\u0000$setLog\u0000$playTally'
+          '\u0000${plays.length}\u0000${plays.isEmpty ? '' : plays.last}\u0000${_encrypter != null}');
+      if (prefs.getInt(sigKey) == sig) return;
+      final content = <String, Object>{
         if (historyJson != null && historyJson.isNotEmpty) 'history': historyJson,
         if (deviceName.isNotEmpty) 'deviceName': deviceName,
         // This device's like decisions, each with the moment it was made, so a
         // removal on one phone outranks an older like on another. See LikeLog.
-        'setLog': await SetLog.instance.exportJson(),
+        'setLog': setLog,
         // Only what THIS device played. Disjoint from every other device's
         // tally, so the totals sum exactly and keep summing exactly however
         // often they are recomputed. See PlayTally for why the cumulative
         // total could not be shared instead.
-        'playTally': await PlayTally.instance.exportJson(),
+        'playTally': playTally,
+        // Which plays were on this device, for the other devices' history
+        // pages. See PlayDevices.
+        'plays': plays,
+      };
+      // Sealed with the account's key, like the backup: this is listening
+      // history, likes and play counts, and was stored readable (seen
+      // 2026-10-16). Without a key it goes as before, by the backup's own rule.
+      // Only `atMs` stays outside, for the cheap "anything new?" query.
+      final sealed = sealSmall(shardSlot(id), jsonEncode(content));
+      await shards.doc(id).set({
+        if (sealed != null) 'sealed': sealed else ...content,
         'atMs': DateTime.now().millisecondsSinceEpoch,
       });
+      await prefs.setInt(sigKey, sig);
     } catch (e) {
       logEvent('cloud: shard push failed ($e)');
     }
@@ -846,7 +1182,7 @@ class CloudSyncService {
     final shards = _shards;
     if (shards == null) return null;
     try {
-      final snap = await shards.get();
+      final snap = await _readShards(shards);
       final mine = await _deviceShardId();
       final logs = <Map<String, Map<String, ({bool member, int atMs})>>>[
         SetLog.decode(localLogJson),
@@ -854,7 +1190,7 @@ class CloudSyncService {
       var foreign = 0;
       for (final d in snap.docs) {
         if (d.id == mine) continue;
-        final raw = d.data()['setLog'] as String?;
+        final raw = _shardPayload(d.id, d.data())['setLog'] as String?;
         if (raw == null || raw.isEmpty) continue;
         // A present but empty log ("{}") isn't a decision, so count decoded decisions,
         // not raw fields.
@@ -880,7 +1216,7 @@ class CloudSyncService {
     final shards = _shards;
     if (shards == null) return null;
     try {
-      final snap = await shards.get();
+      final snap = await _readShards(shards);
       final mine = await _deviceShardId();
       final tallies = <Map<String, int>>[
         PlayTally.decode(await PlayTally.instance.exportJson()),
@@ -888,7 +1224,7 @@ class CloudSyncService {
       var foreign = 0;
       for (final d in snap.docs) {
         if (d.id == mine) continue;
-        final raw = d.data()['playTally'] as String?;
+        final raw = _shardPayload(d.id, d.data())['playTally'] as String?;
         if (raw == null || raw.isEmpty) continue;
         // "{}" is a device that has published a shard but played nothing —
         // no plays to add, so not a reason to recompute. Same reasoning as the
@@ -974,38 +1310,103 @@ class CloudSyncService {
     try {
       final prefs = await SharedPreferences.getInstance();
       final localHistory = prefs.getString('auvy_history_v2');
-      final merged = await mergeHistoryShards(localHistory);
-      var changedPrefs = false;
-      if (merged != null && merged != localHistory) {
-        await prefs.setString('auvy_history_v2', merged);
-        changedPrefs = true;
-      }
-      // Pull merged data into live state before anything can save over it. Awaited
-      // for the same reason.
-      if (changedPrefs) {
-        final hook = onMergedIntoPrefs;
-        if (hook != null) {
-          await hook();
-          logEvent('cloud: merged history pulled into live state');
-        } else {
-          // Says so rather than leaving a merge that will be quietly reverted.
-          logEvent('WARN: history merged on disk but nothing is registered to '
-              'reload it — the next save will overwrite it');
+      final shards = _shards;
+      if (shards == null) return;
+
+      // Read every shard only when another device's has changed since the last
+      // full merge. The check is one small query (at most three documents); most
+      // launches find nothing new, and most shards are old installs that never
+      // change again. The merges are idempotent, so skipping one that would
+      // have added nothing changes nothing.
+      final mine = await _deviceShardId();
+      final seenKey = '$_kShardSeenPrefix$_userId::$mine';
+      int? seenMax, lastFull;
+      try {
+        final raw = prefs.getString(seenKey);
+        if (raw != null) {
+          final d = jsonDecode(raw);
+          if (d is Map) {
+            seenMax = (d['max'] as num?)?.toInt();
+            lastFull = (d['full'] as num?)?.toInt();
+          }
+        }
+      } catch (_) {}
+      final nowMs = DateTime.now().millisecondsSinceEpoch;
+      var foreignNewer = false;
+      if (seenMax != null && lastFull != null &&
+          nowMs - lastFull < shardFullMergeEvery.inMilliseconds && nowMs >= lastFull) {
+        try {
+          final newer = await shards.where('atMs', isGreaterThan: seenMax).limit(3).get();
+          foreignNewer = newer.docs.any((d) => d.id != mine);
+        } catch (_) {
+          foreignNewer = true; // can't tell: merge in full
         }
       }
+      String? merged;
+      if (!shardMergeNeeded(
+          seenMaxAtMs: seenMax, lastFullMs: lastFull, nowMs: nowMs, foreignNewer: foreignNewer)) {
+        logEvent('cloud: shards — nothing new from your other devices since the last merge');
+      } else {
+        _shardSnap = await shards.get();
+        try {
+          merged = await mergeHistoryShards(localHistory);
+          var changedPrefs = false;
+          if (merged != null && merged != localHistory) {
+            await prefs.setString('auvy_history_v2', merged);
+            changedPrefs = true;
+          }
+          // Pull merged data into live state before anything can save over it. Awaited
+          // for the same reason.
+          if (changedPrefs) {
+            final hook = onMergedIntoPrefs;
+            if (hook != null) {
+              await hook();
+              logEvent('cloud: merged history pulled into live state');
+            } else {
+              // Says so rather than leaving a merge that will be quietly reverted.
+              logEvent('WARN: history merged on disk but nothing is registered to '
+                  'reload it — the next save will overwrite it');
+            }
+          }
 
-      // Each in its own try, inside their own methods: one of the three
-      // failing must not cost the other two, and none of them may cost the
-      // history merge that already succeeded above.
-      await _mergeSetsIntoLive();
-      await _mergeCountsIntoLive();
+          // Each in its own try, inside their own methods: one of the three
+          // failing must not cost the other two, and none of them may cost the
+          // history merge that already succeeded above.
+          await _mergeSetsIntoLive();
+          await _mergeCountsIntoLive();
+
+          var newest = seenMax ?? 0;
+          final othersPlays = <(String, List<String>)>[];
+          for (final d in _shardSnap!.docs) {
+            if (d.id == mine) continue;
+            final at = (d.data()['atMs'] as num?)?.toInt() ?? 0;
+            if (at > newest) newest = at;
+            final p = _shardPayload(d.id, d.data());
+            final plays = p['plays'];
+            final name = (p['deviceName'] ?? '').toString();
+            if (plays is List && name.isNotEmpty) {
+              othersPlays.add((name, [for (final e in plays) e.toString()]));
+            }
+          }
+          // Which of the ledger's plays were on which other device (history page).
+          try {
+            await PlayDevices.instance.absorbOthers(othersPlays);
+          } catch (_) {}
+          await prefs.setString(seenKey, jsonEncode({'max': newest, 'full': nowMs}));
+        } finally {
+          _shardSnap = null;
+        }
+      }
 
       // Publish last. The shard carries the merged history and set log, so a device
       // that never returns still has its decisions honoured. Safe to republish
       // because both merges are idempotent. The play tally isn't merged into it (see
-      // SetLog.absorb for why sums can't be republished).
+      // SetLog.absorb for why sums can't be republished). Written only when its
+      // content changed (see pushHistoryShard), so the other devices aren't sent
+      // into a full merge for nothing.
       unawaited(pushHistoryShard(merged ?? localHistory));
     } catch (e) {
+      _shardSnap = null;
       // A shard failure must never break the ordinary restore. Losing a merge
       // costs one device's recent history until the next launch; throwing here
       // would cost the whole activation.
@@ -1124,6 +1525,193 @@ class CloudSyncService {
     'auvy_recognition_history', // songs identified in a moment that has passed
   };
 
+  /// The manifest fields every push writes itself (see the end of the push).
+  static const Set<String> _manifestFields = {
+    'format',
+    'blobs',
+    'blob_gens',
+    'blob_layout',
+    'backup_ms',
+    'updatedAt',
+    'library_has_content',
+  };
+
+  /// Whether the cloud's library holds the user's content, as its manifest
+  /// last said (see cloudLibraryHasContent).
+  bool _cloudLibraryHasContent = false;
+
+  /// Whether a serialized library holds anything of the user's
+  /// (libraryHasUserContent). Missing or unreadable counts as no.
+  @visibleForTesting
+  static bool libraryHasContentIn(String? blob) {
+    if (blob == null || blob.isEmpty) return false;
+    try {
+      final d = jsonDecode(blob);
+      return d is Map<String, dynamic> && libraryHasUserContent(d);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Whether the backup's library holds the user's content. Pushes record it
+  /// (`library_has_content`, from 2026-10-17); for a manifest an older build
+  /// wrote, whether it lists a playlist of the user's (one that isn't a
+  /// built-in or a device's own).
+  @visibleForTesting
+  static bool cloudLibraryHasContent(Map<String, dynamic>? manifest) {
+    if (manifest == null) return false;
+    final flag = manifest['library_has_content'];
+    if (flag is bool) return flag;
+    final blobs = manifest['blobs'];
+    if (blobs is! Map) return false;
+    final notUsers = {
+      for (final n in {...kSystemLibraryTitles, ...kDeviceOwnedPlaylists, 'Cached'})
+        '${kLibraryPartPrefix}pl.${playlistPartId(n)}',
+    };
+    return blobs.entries.any((e) =>
+        e.key is String &&
+        (e.key as String).startsWith('${kLibraryPartPrefix}pl.') &&
+        !notUsers.contains(e.key) &&
+        e.value is int &&
+        (e.value as int) > 0);
+  }
+
+  /// A restored library that holds none of the user's content, over a local
+  /// one that does: the backup came from a reset phone (see activateAndRestore).
+  @visibleForTesting
+  static bool backupLooksReset(String? incomingLibrary, String? localLibrary) =>
+      incomingLibrary != null &&
+      !libraryHasContentIn(incomingLibrary) &&
+      libraryHasContentIn(localLibrary);
+
+  /// Whether this phone has ever pushed or taken a library part (a record of
+  /// one survives in the pushed signatures). A reset phone has none, a phone
+  /// whose owner emptied the library does: only the first is held back.
+  bool _heldLibrary(SharedPreferences prefs) =>
+      _pushedSig.keys.any((k) => k.startsWith(kLibraryPartPrefix));
+
+  /// Settings older builds synced and this one deliberately doesn't: dropped
+  /// from the manifest rather than carried as a newer version's (see
+  /// carryUnknown). The wake-up alarm's time and days belong to the phone by the
+  /// bed; synced, both phones rang (see _stringKeys).
+  static const Set<String> _retiredKeys = {
+    'auvy_alarm_enabled',
+    'auvy_alarm_hour',
+    'auvy_alarm_minute',
+    'auvy_alarm_days',
+  };
+
+  static bool _isKnownBlob(String k) =>
+      _stringKeys.contains(k) || k.startsWith(kLibraryPartPrefix);
+
+  static bool _isKnownField(String k) =>
+      _intKeys.contains(k) ||
+      _doubleKeys.contains(k) ||
+      _stringListKeys.contains(k) ||
+      _boolKeys.contains(k);
+
+  /// Keeps what a NEWER Auvy put in the backup that this build has no name for.
+  ///
+  /// A push writes the whole manifest, so a build used to drop every key it
+  /// didn't know. Seen 2026-10-17: the Galaxy's older APK left out the three
+  /// player settings the iPhone's newer build syncs (68 keys against 71), and
+  /// the iPhone uploaded them again after every Galaxy push. The same would
+  /// happen between any two versions on one account.
+  ///
+  /// Only keys this build has no name for are carried. Its own keys go up or
+  /// drop out exactly as before, so a deleted playlist's part (a known prefix)
+  /// still leaves the backup. A carried blob keeps its part count, generation
+  /// and layout, so its parts stay readable and pass the torn-write check;
+  /// nothing deletes them (a push only retires parts of keys it re-uploads),
+  /// and a restore never reads them (it fetches known keys only). A carried
+  /// setting keeps its value. Taken from the copy read inside the manifest
+  /// transaction, so it is exactly what the cloud holds. Works from 1.4.0 on;
+  /// 1.3.0 still drops them.
+  @visibleForTesting
+  static ({Map<String, dynamic> manifest, List<String> carried}) carryUnknown(
+      Map<String, dynamic> manifest, Map<String, dynamic>? cloud) {
+    final out = Map<String, dynamic>.from(manifest);
+    final carried = <String>[];
+    if (cloud == null) return (manifest: out, carried: carried);
+    final cloudBlobs = cloud['blobs'];
+    if (cloudBlobs is Map) {
+      final blobs = Map<String, dynamic>.from(out['blobs'] as Map? ?? const {});
+      final gens = Map<String, dynamic>.from(out['blob_gens'] as Map? ?? const {});
+      final layouts = Map<String, dynamic>.from(out['blob_layout'] as Map? ?? const {});
+      final cloudGens = cloud['blob_gens'] is Map ? cloud['blob_gens'] as Map : const {};
+      final cloudLayouts =
+          cloud['blob_layout'] is Map ? cloud['blob_layout'] as Map : const {};
+      for (final e in cloudBlobs.entries) {
+        final k = e.key.toString();
+        final n = e.value;
+        if (n is! int || n <= 0) continue;
+        if (blobs.containsKey(k) || _isKnownBlob(k) || _retiredKeys.contains(k)) continue;
+        blobs[k] = n;
+        final g = cloudGens[k];
+        if (g is int) gens[k] = g;
+        final l = cloudLayouts[k];
+        if (l is int) layouts[k] = l;
+        carried.add(k);
+      }
+      out['blobs'] = blobs;
+      out['blob_gens'] = gens;
+      out['blob_layout'] = layouts;
+    }
+    for (final e in cloud.entries) {
+      final k = e.key;
+      if (_manifestFields.contains(k) ||
+          out.containsKey(k) ||
+          _isKnownField(k) ||
+          _retiredKeys.contains(k)) {
+        continue;
+      }
+      final v = e.value;
+      if (v is num || v is bool || v is String || v is List) {
+        out[k] = v;
+        carried.add(k);
+      }
+    }
+    return (manifest: out, carried: carried);
+  }
+
+  /// Whether a push would change nothing in the cloud.
+  ///
+  /// True when there is no blob to upload, every value it would send matches
+  /// the record of the last push (or of the restore that brought it), and no
+  /// key came or went. Writing the manifest anyway only moved `backup_ms` on,
+  /// which tells the account's other phones that something changed: each then
+  /// ran a restore that fetched nothing and held its own pushes until it had.
+  /// Any doubt (a missing record, a count that differs) means writing.
+  @visibleForTesting
+  static bool pushChangesNothing({
+    required bool anyUploaded,
+    required Map<String, int> newSigs,
+    required Map<String, int> pushedSig,
+    required Map<String, int> index,
+    required Map<String, int> cloudCounts,
+  }) {
+    if (anyUploaded) return false;
+    for (final e in newSigs.entries) {
+      if (pushedSig[e.key] != e.value) return false;
+    }
+    // A setting removed here has to leave the manifest.
+    for (final k in pushedSig.keys) {
+      if (k.startsWith('=') && !newSigs.containsKey(k)) return false;
+    }
+    // A blob that came, went or changed size.
+    for (final e in index.entries) {
+      if (cloudCounts[e.key] != e.value) return false;
+    }
+    for (final e in cloudCounts.entries) {
+      if (e.value > 0 && _isKnownBlob(e.key) && !index.containsKey(e.key)) return false;
+    }
+    return true;
+  }
+
+  /// The carried set last logged, so the note appears when it changes rather
+  /// than on every push.
+  String _carriedUnknownAnnounced = '';
+
   /// Keys whose "absent locally, carried from the cloud" notice was already logged
   /// this session. The carry happens on every push; only the log line is once, since
   /// a feature the user never opened stays absent for good.
@@ -1194,6 +1782,8 @@ class CloudSyncService {
       endAccountReset();
       return false;
     }
+    // See _resetEpoch: checked before anything is written.
+    final epoch = _resetEpoch;
     // try/finally so the reset window closes on every exit (early returns, the
     // conflict branch, a throw). A window left open would silently suppress every
     // backup for the rest of the process.
@@ -1207,7 +1797,24 @@ class CloudSyncService {
       // Everything this session may later overwrite. See _knownCloudMs.
       _knownCloudMs = cloudMs;
       final prefs = await SharedPreferences.getInstance();
-      final localMs = prefs.getInt(_localMarkerKey) ?? 0;
+      var localMs = prefs.getInt(_localMarkerKey) ?? 0;
+      _cloudLibraryHasContent = cloudLibraryHasContent(data);
+      // The record _heldLibrary reads; loaded again below, a no-op once warm.
+      await _loadPushedSigs(prefs);
+      // This phone holds none of the library the backup has, and has never had
+      // it (no record of pushing or taking a library part): a reset or fresh
+      // phone. It restores whatever its watermark says, since a watermark it
+      // has no data for is wrong (see _resetEpoch).
+      if (_cloudLibraryHasContent &&
+          !libraryHasContentIn(prefs.getString(_kLibraryKey)) &&
+          !_heldLibrary(prefs)) {
+        if (localMs > 0) {
+          logEvent('cloud: this phone has none of the library the backup holds '
+              'but a watermark says it is up to date — restoring regardless');
+        }
+        localMs = 0;
+      }
+      lastRestoreWasFirst = localMs == 0;
 
       // Cache the cloud part index for the next push's stale-part cleanup —
       // even when nothing needs restoring.
@@ -1268,6 +1875,9 @@ class CloudSyncService {
       await _loadPushedSigs(prefs);
       final mergeOnly =
           unpushed > 0 && !_accountResetting && !force && !_onlyListeningPending;
+      // Settings changed here are kept in every restore but a reset or a forced
+      // one (see applyScalar and the text settings in the blob loop).
+      final protectSettings = mergeOnly || (!_accountResetting && !force);
       if (mergeOnly) {
         logEvent('cloud: MERGING — the cloud backup is newer (backup_ms=$cloudMs vs '
             'local $localMs) and this device has '
@@ -1292,6 +1902,11 @@ class CloudSyncService {
       // Merge bookkeeping and the other device's playing state; see above.
       final keptLocal = <String>[];
       String? incomingHandoff;
+      // Blobs this restore took from the cloud, for the record of what this
+      // device holds (see _appliedGens), and that record as it stood. An account
+      // reset or a forced restore takes everything, as restores always did.
+      final takenFromCloud = <String>[];
+      final applied = (_accountResetting || force) ? <String, int>{} : _loadAppliedGens(prefs);
       if (data['format'] == _formatVersion) {
         // What to pull
         // The manifest, not our own key list, decides. A backup written by the
@@ -1305,11 +1920,46 @@ class CloudSyncService {
         // valid once its parts are joined, and half a library in prefs is the
         // failure mode this whole design exists to prevent.
         final restoredParts = <String, String>{};
+        final libraryFromCloud = <String>[];
 
         // v2: string blobs live in chunked part docs listed by the manifest.
-        final keysToFetch = [..._stringKeys, ...libraryPartKeys]
-            .where((k) => (_cloudPartCounts[k] ?? 0) > 0)
-            .toList();
+        // Only the ones that changed since this device last held them are
+        // fetched (see _appliedGens); the rest are already here.
+        final cloudStringKeys =
+            _stringKeys.where((k) => (_cloudPartCounts[k] ?? 0) > 0).toList();
+        final cloudLibraryKeys =
+            libraryPartKeys.where((k) => (_cloudPartCounts[k] ?? 0) > 0).toList();
+        final stringFetch = keysNeedingFetch(
+            cloudStringKeys, _cloudPartGens, applied, (k) => prefs.getString(k) != null);
+        // While merging, a blob changed here since this device's last push is kept
+        // whatever the cloud holds (see the merge below), so reading it is wasted:
+        // seen 2026-10-16, a merge fetched 16 blobs and kept all 16 local. The other
+        // device's playing state is always read; it goes to the player, not over a
+        // local copy.
+        if (mergeOnly) {
+          final keptUnread = [
+            for (final k in stringFetch)
+              if (k != kHandoffKey && localChangedSincePush(_pushedSig[k], prefs.getString(k))) k,
+          ];
+          stringFetch.removeWhere(keptUnread.contains);
+          keptLocal.addAll(keptUnread);
+        }
+        // While merging, the library parts are not used (the sets were merged
+        // from every device's log above), so they aren't fetched either. Unless
+        // this phone has none of the user's library (a reset phone with one
+        // unpushed edit would otherwise never get it back): then they are taken.
+        final libraryMerge =
+            mergeOnly && libraryHasContentIn(prefs.getString(_kLibraryKey));
+        final localLibraryParts =
+            libraryMerge ? const <String, String>{} : splitLibrary(prefs.getString(_kLibraryKey));
+        final libraryPlan = libraryMerge
+            ? (fetch: const <String>[], fromLocal: const <String, String>{}, skip: true)
+            : planLibraryParts(cloudLibraryKeys, _cloudPartGens, applied, localLibraryParts);
+        final keysToFetch = [...stringFetch, ...libraryPlan.fetch];
+        final cloudKeyCount = cloudStringKeys.length + cloudLibraryKeys.length;
+        print('restore: ${cloudKeyCount - keysToFetch.length} of $cloudKeyCount blob(s) '
+            'unchanged since this phone last had them; fetching ${keysToFetch.length}'
+            '${libraryPlan.skip ? "" : " (library: ${libraryPlan.fetch.length} part(s) fetched, ${libraryPlan.fromLocal.length} from this phone)"}');
 
         // Fetch every key concurrently, then process them in order. Fetching is pure
         // I/O, so up to six keys are in flight at once (more could get the client
@@ -1354,8 +2004,13 @@ class CloudSyncService {
 
         // One collection query for all parts instead of one request per part; latency,
         // not bytes, was the cost. It also returns orphaned part docs, which are ignored
-        // below: the manifest index still decides what counts.
-        try {
+        // below: the manifest index still decides what counts. But it reads (and is
+        // billed for) every part document, so it is used only when most of them are
+        // needed; a few changed blobs are read part by part.
+        final neededParts = keysToFetch.fold<int>(0, (n, k) => n + (_cloudPartCounts[k] ?? 0));
+        final totalParts = _cloudPartCounts.values.fold<int>(0, (n, c) => n + (c > 0 ? c : 0));
+        if (keysToFetch.isNotEmpty && neededParts * 2 >= totalParts) {
+         try {
           final all = await _blobs!.get();
           final byId = {for (final d in all.docs) d.id: d};
           for (final k in keysToFetch) {
@@ -1393,6 +2048,7 @@ class CloudSyncService {
           // not listing the collection would fail here, and the per-key path is
           // the same correctness with more round trips.
           print('WARN: bulk blob read failed ($e) — falling back to per-key reads');
+         }
         }
 
         // Whatever the bulk read did not cover, fetched key by key. Bounded at six
@@ -1459,6 +2115,42 @@ class CloudSyncService {
         print('restore: decrypted ${joinedByKey.length} blob(s) off-thread '
             'in ${DateTime.now().difference(decodeStarted).inMilliseconds}ms');
 
+        // A wipe that began while this ran: nothing from here on is this
+        // account's to write (see _resetEpoch).
+        if (epoch != _resetEpoch) {
+          _restoring = false;
+          logEvent('cloud: restore abandoned — the account was reset while it ran');
+          return false;
+        }
+
+        // A backup with no library of the user's, over a phone that has one,
+        // came from a phone that was reset and pushed before it restored (seen
+        // 2026-10-17: the iPhone's emptied library went up over the backup).
+        // Nothing in it is taken, not even its other blobs (that phone's were
+        // just as empty); this phone's whole copy goes up over it instead.
+        if (!mergeOnly && !_accountResetting && !force && !libraryPlan.skip) {
+          final incoming = joinLibrary({
+            ...libraryPlan.fromLocal,
+            for (final k in libraryPlan.fetch)
+              if (decoded[k] != null) k: decoded[k]!,
+          });
+          if (backupLooksReset(incoming, prefs.getString(_kLibraryKey))) {
+            logEvent('STOP: the cloud backup (backup_ms=$cloudMs) holds none of '
+                'your library while this phone has it — it came from a phone '
+                'that was reset before it restored. Nothing taken from it; this '
+                "phone's whole copy goes up over it now.");
+            // Everything re-uploads: the cloud's parts are the reset phone's.
+            _pushedSig.clear();
+            await _savePushedSigs(prefs);
+            _restoring = false;
+            _needsRemoteMergeBeforePush = false;
+            _onlyListeningPending = false;
+            await _markPending();
+            unawaited(flushPendingNow(reason: 'replacing a reset phone\'s backup'));
+            return false;
+          }
+        }
+
         // Phase 3: apply, sequentially, in the original key order.
         for (final k in keysToFetch) {
           final joined = joinedByKey[k];
@@ -1467,36 +2159,50 @@ class CloudSyncService {
           // restored blob may be marked as already pushed, so the next push can skip it.
           // Named for its meaning, so the next envelope version has one obvious place to
           // update.
+          final plain = decoded[k];
+          if (plain == null) continue; // encrypted but no key → keep local copy
           final isCurrentStorageForm = _encrypter == null
               // No key: plaintext IS the current form, and anything encrypted
               // is not readable as one anyway.
               ? !joined.startsWith(_encMarker) &&
                   !joined.startsWith(_encMarkerV2) &&
                   !joined.startsWith(_encMarkerV3)
-              // With a key, only the newest envelope counts. A v1 or v2 blob
-              // is left unmarked ON PURPOSE so the next push rewrites it as
-              // v3 — that is the compression migration, and it costs one
-              // upload per blob, once.
-              : joined.startsWith(_encMarkerV3);
-          final plain = decoded[k];
-          if (plain == null) continue; // encrypted but no key → keep local copy
+              // With a key, the envelope this build would write. A v1 blob, or
+              // a v2 one compression would have shrunk, is left unmarked ON
+              // PURPOSE so the next push rewrites it as v3 (the compression
+              // migration, one upload per blob, once). A v2 one compression
+              // would NOT have shrunk is current: the encoder writes v2 for
+              // those (a short setting, an empty list), and treating them as
+              // old re-uploaded ~21 of them after every fresh restore and
+              // bounced each changed one between phones (seen 2026-10-17).
+              : joined.startsWith(_encMarkerV3) ||
+                  (joined.startsWith(_encMarkerV2) && !compressedIsSmaller(plain));
 
           // Another device's playing state goes to the player, not over this
           // device's own (which the next push replaces anyway).
           if (k == kHandoffKey) {
             incomingHandoff = plain;
+            takenFromCloud.add(k);
             continue;
           }
 
-          if (mergeOnly) {
+          if (mergeOnly && k.startsWith(kLibraryPartPrefix)) {
             // The library's sets were already merged from every device's log
-            // (_mergeShardsIntoLocal above), so the local library is kept whole.
-            if (k.startsWith(kLibraryPartPrefix)) continue;
+            // (_mergeShardsIntoLocal above), so the local library is kept whole,
+            // unless there is none of it here (see libraryMerge).
+            if (libraryMerge) continue;
+          } else if (mergeOnly) {
             final local = prefs.getString(k);
             if (_changedSinceLastPush(k, local, plain)) {
               keptLocal.add(k);
               continue;
             }
+          } else if (protectSettings && stringSettingKeys.contains(k) &&
+              textSettingChangedHere(_pushedSig[k], prefs.getString(k), plain)) {
+            // A text setting changed here that never went up: kept, like a
+            // numeric one (see applyScalar), and uploaded below.
+            keptLocal.add(k);
+            continue;
           }
 
           // A newer backup isn't automatically better: refuse to replace local content
@@ -1511,6 +2217,7 @@ class CloudSyncService {
           // Library parts are held back and joined below. See restoredParts.
           if (k.startsWith(kLibraryPartPrefix)) {
             restoredParts[k] = plain;
+            libraryFromCloud.add(k);
             if (plain.isNotEmpty && plain != '{}' && plain != '[]') {
               restoredAnyData = true;
             }
@@ -1521,6 +2228,7 @@ class CloudSyncService {
           }
 
           await prefs.setString(k, plain);
+          takenFromCloud.add(k);
           if (plain.isNotEmpty && plain != '{}' && plain != '[]') {
             restoredAnyData = true;
           }
@@ -1537,8 +2245,23 @@ class CloudSyncService {
         // than replaced by a fragment. The same destructive-restore guard is
         // applied to the JOINED result, because emptiness is a property of the
         // whole library and cannot be judged from one section.
+        // The library is rebuilt from all of the cloud's parts: the unchanged ones
+        // from this phone's copy (not fetched, see planLibraryParts), and a changed
+        // one that couldn't be read (torn, refused) keeps this phone's copy too,
+        // rather than dropping that playlist from the library. A part the cloud no
+        // longer lists (deleted on another device) is left out, as before.
+        if (libraryFromCloud.isNotEmpty) {
+          for (final k in cloudLibraryKeys) {
+            final local = libraryPlan.fromLocal[k] ?? localLibraryParts[k];
+            if (!restoredParts.containsKey(k) && local != null) restoredParts[k] = local;
+          }
+        }
         if (restoredParts.isNotEmpty) {
-          final joined = joinLibrary(restoredParts);
+          // This phone's own Downloads and My Top 50 stay (see keepDeviceOwned).
+          final rejoined = joinLibrary(restoredParts);
+          final joined = rejoined == null
+              ? null
+              : keepDeviceOwned(rejoined, prefs.getString(_kLibraryKey));
           if (joined == null) {
             print('WARN: library parts restored but none were readable — '
                 'keeping the local library');
@@ -1548,6 +2271,7 @@ class CloudSyncService {
                 'one is not. Keeping the local copy.');
           } else {
             await prefs.setString(_kLibraryKey, joined);
+            takenFromCloud.addAll(libraryFromCloud);
             // Playlists counted separately from the section parts: "restored 12
             // parts" cannot distinguish a full library from one that got its
             // likes back and none of its playlists, which is the exact
@@ -1569,10 +2293,16 @@ class CloudSyncService {
           }
         }
       }
-      // Settings: when merging, one changed here since the last push keeps its
-      // local value. Each applied one records its base for the next merge.
+      // Settings: one changed here since the last push keeps its local value,
+      // and goes up next. Not only when merging: most settings (the accent, the
+      // appearance) save without scheduling a backup, so "nothing but listening
+      // telemetry pending" didn't mean nothing else changed. Seen 2026-10-16:
+      // the accent picked on the iPhone was replaced by the Galaxy's older one
+      // at the next restore. Only an account reset or a forced restore takes
+      // the cloud copy wholesale. Each applied one records its base for the
+      // next merge.
       Future<void> applyScalar(String k, Object value, Future<void> Function() write) async {
-        if (mergeOnly && _scalarChangedSinceLastPush(k, prefs.get(k))) {
+        if (protectSettings && _scalarChangedSinceLastPush(k, prefs.get(k))) {
           keptLocal.add(k);
           return;
         }
@@ -1609,7 +2339,17 @@ class CloudSyncService {
         // The tutorial flags aren't forced here: nothing starts the tutorial
         // automatically any more, so they gate nothing.
       }
+      if (epoch != _resetEpoch) {
+        _restoring = false;
+        logEvent('cloud: restore abandoned before its watermark — the account '
+            'was reset while it ran');
+        return false;
+      }
       await prefs.setInt(_localMarkerKey, cloudMs);
+      // After the watermark, so a crash between the two leaves a record that
+      // doesn't match it and is ignored (the next restore fetches everything).
+      await _saveAppliedGens(prefs,
+          appliedAfterRestore(applied, _cloudPartGens, _cloudPartCounts, takenFromCloud), cloudMs);
       // What was just restored IS what the cloud holds, so it is the base for the
       // next push's skips and the next merge, and must survive this process.
       await _savePushedSigs(prefs);
@@ -1625,6 +2365,16 @@ class CloudSyncService {
             '${keptLocal.isEmpty ? "" : " (${keptLocal.take(8).join(", ")}${keptLocal.length > 8 ? ", …" : ""})"}'
             ', took the rest from the cloud; uploading the local ones now');
         unawaited(flushPendingNow(reason: 'merged with a newer backup'));
+      } else if (keptLocal.isNotEmpty) {
+        // Settings changed here that never went up (see applyScalar): kept, and
+        // sent, or the other device would keep its older values. A real setting
+        // goes up on the short floor; listening stamps (which change with every
+        // song) wait for the relaxed one, or every restore would force a push.
+        final edits = keptLocal.where((k) => !listeningScalarKeys.contains(k)).toList();
+        logEvent('cloud: kept ${keptLocal.length} value(s) changed here '
+            '(${keptLocal.take(8).join(", ")}${keptLocal.length > 8 ? ", …" : ""}); '
+            '${edits.isEmpty ? "listening stamps only, they go up with the next push" : "uploading them"}');
+        scheduleBackup(urgency: edits.isEmpty ? BackupUrgency.listening : BackupUrgency.userEdit);
       }
       final h = incomingHandoff;
       if (h != null) {
@@ -1641,7 +2391,9 @@ class CloudSyncService {
       print('ERROR: Cloud restore FAILED for $_userId: $e');
       return false;
     } finally {
-      endAccountReset();
+      // Only the window this restore was started inside; one a later wipe
+      // opened is that wipe's to close.
+      if (epoch == _resetEpoch) endAccountReset();
     }
   }
 
@@ -1838,6 +2590,7 @@ class CloudSyncService {
         final snap = await _doc!.get();
         final seenMs = snap.data()?['backup_ms'];
         if (seenMs is int) remoteMs = seenMs;
+        _cloudLibraryHasContent = cloudLibraryHasContent(snap.data());
         if (!_partCountsLoaded) {
           final rawIdx = snap.data()?['blobs'];
           _cloudPartCounts = (rawIdx is Map)
@@ -1977,7 +2730,23 @@ class CloudSyncService {
       // The library goes up in pieces (per section and per playlist), each with its
       // own signature, so liking a song uploads the likes and nothing else. The parts
       // use the same push machinery as every other blob; only the key list differs.
-      final libraryParts = splitLibrary(prefs.getString(_kLibraryKey));
+      final localLibrary = prefs.getString(_kLibraryKey);
+      final localHasLibrary = libraryHasContentIn(localLibrary);
+      // A phone holding none of the library the backup has, and never having
+      // held it, pushes nothing: it was reset (or is new) and hasn't restored
+      // yet, and its empty copy would replace the account's (seen 2026-10-17).
+      // It restores first; the next push carries what that brought.
+      if (!localHasLibrary && _cloudLibraryHasContent && !_heldLibrary(prefs)) {
+        _needsRemoteMergeBeforePush = true;
+        lastPushError =
+            'Backup held: this phone has not restored the library yet.';
+        logEvent('STOP: backup held — this phone has none of the library the '
+            'cloud backup holds and has not restored it yet; restoring first');
+        final hook = onHeld;
+        if (hook != null) Timer.run(hook);
+        return;
+      }
+      final libraryParts = splitLibrary(localLibrary);
       final pushKeys = <String>[
         for (final k in _stringKeys)
           // Skip the monolith when the split succeeded. If splitting failed
@@ -2109,6 +2878,25 @@ class CloudSyncService {
 
       if (manifest.isEmpty && !hasAnyBlob) return;
 
+      // Nothing to say: see pushChangesNothing. The debt is settled as by a
+      // push, since the cloud already holds all of it.
+      if (pushChangesNothing(
+          anyUploaded: changed.isNotEmpty,
+          newSigs: newSigs,
+          pushedSig: _pushedSig,
+          index: index,
+          cloudCounts: _cloudPartCounts)) {
+        await _clearPending();
+        _lastPushAt = DateTime.now();
+        _onlyListeningPending = true;
+        _deferLogged = false;
+        lastPushError = null;
+        print('backup: nothing new since the last push (every blob and setting '
+            'matches the cloud copy) — not written, so the other devices are '
+            'not sent to restore nothing');
+        return;
+      }
+
       final nowMs = DateTime.now().millisecondsSinceEpoch;
       manifest['format'] = _formatVersion;
       manifest['blobs'] = index;
@@ -2116,6 +2904,8 @@ class CloudSyncService {
       manifest['blob_layout'] = layouts;
       manifest['backup_ms'] = nowMs;
       manifest['updatedAt'] = FieldValue.serverTimestamp();
+      // For the guards above, on every phone (see cloudLibraryHasContent).
+      manifest['library_has_content'] = localHasLibrary;
       sealBatch();
 
       // Blob parts first, manifest last — the manifest is what makes them
@@ -2130,6 +2920,7 @@ class CloudSyncService {
       // during them would still slip past it. Losing here costs orphan parts,
       // which restore already ignores — the manifest index defines what counts.
       Object? writeError;
+      var carriedUnknown = const <String>[];
       final wrote = await FirebaseFirestore.instance
           .runTransaction<bool>((tx) async {
         final snap = await tx.get(_doc!);
@@ -2140,7 +2931,11 @@ class CloudSyncService {
         if (cloudMs > _knownCloudMs) {
           return false;
         }
-        tx.set(_doc!, manifest);
+        // What a newer Auvy wrote and this build can't name goes back in as it
+        // was. See carryUnknown.
+        final kept = carryUnknown(manifest, snap.data());
+        carriedUnknown = kept.carried;
+        tx.set(_doc!, kept.manifest);
         return true;
       }).catchError((Object e) {
         writeError = e;
@@ -2170,6 +2965,16 @@ class CloudSyncService {
         return;
       }
       _knownCloudMs = nowMs;
+      final carriedNote = (List<String>.of(carriedUnknown)..sort()).join(', ');
+      if (carriedNote != _carriedUnknownAnnounced) {
+        _carriedUnknownAnnounced = carriedNote;
+        if (carriedNote.isNotEmpty) {
+          logEvent('cloud: kept ${carriedUnknown.length} entr'
+              '${carriedUnknown.length == 1 ? "y" : "ies"} a newer Auvy wrote '
+              '($carriedNote): this version has no name for them, so they stay '
+              'as they were');
+        }
+      }
       // A write that passed the check proves nothing newer is in the cloud, so any
       // earlier hold no longer applies.
       _needsRemoteMergeBeforePush = false;
@@ -2193,7 +2998,11 @@ class CloudSyncService {
       // upload landed would tell the next launch "already pushed" about bytes
       // that never arrived.
       await _savePushedSigs(prefs);
+      // What this device now holds in the cloud's terms (see _appliedGens): read
+      // against the old watermark, saved against the new one.
+      final appliedNow = appliedAfterPush(_loadAppliedGens(prefs), gens, pushGen);
       await prefs.setInt(_localMarkerKey, nowMs);
+      await _saveAppliedGens(prefs, appliedNow, nowMs);
       // Cleared here and only here: after the manifest write, inside the try, so a
       // push that fails on the way up keeps the debt recorded.
       await _clearPending();

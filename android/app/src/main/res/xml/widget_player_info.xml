@@ -1,15 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- updatePeriodMillis=0: the widget is pushed from the app on every
-     track/like/play change — no polling. -->
+     track/like/play change — no polling. Resizable both ways, from two by two
+     (the small one) to four by four (with Up Next); one row gives the strip.
+     PlayerWidgetProvider picks the layout by size. Starts at four by two. -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
-    android:minWidth="250dp"
-    android:minHeight="60dp"
+    android:minWidth="110dp"
+    android:minHeight="110dp"
+    android:minResizeWidth="110dp"
+    android:minResizeHeight="50dp"
+    android:maxResizeHeight="420dp"
     android:targetCellWidth="4"
-    android:targetCellHeight="1"
-    android:maxResizeHeight="120dp"
-    android:resizeMode="horizontal"
+    android:targetCellHeight="2"
+    android:resizeMode="horizontal|vertical"
     android:widgetCategory="home_screen"
     android:updatePeriodMillis="0"
     android:description="@string/widget_player_desc"
-    android:previewLayout="@layout/widget_player"
-    android:initialLayout="@layout/widget_player" />
+    android:previewLayout="@layout/widget_player_large"
+    android:initialLayout="@layout/widget_player_large" />

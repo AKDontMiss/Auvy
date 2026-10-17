@@ -163,6 +163,17 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
     try {
       final prefs = await SharedPreferences.getInstance();
       _hasOnboarded = prefs.getBool('has_onboarded') ?? false;
+      // The flag alone must not decide. Seen on device (2026-10-15): it went
+      // missing from the saved settings while everything else of the user's
+      // stayed, and a signed-in listener with a full library was sent to
+      // onboarding. A device that has an owner stamped on its data and a library
+      // belongs to someone who has used Auvy: repair the flag instead.
+      if (!_hasOnboarded && hasEstablishedLocalUser(prefs)) {
+        _hasOnboarded = true;
+        await prefs.setBool('has_onboarded', true);
+        print('DIAG: SplashScreen _bootstrap: has_onboarded was missing but this '
+            "device holds a signed-in user's library — repaired, not onboarding");
+      }
       print('DIAG: SplashScreen _bootstrap: _hasOnboarded=$_hasOnboarded');
       try {
         _loggedIn = await SessionAuthService()
@@ -584,4 +595,16 @@ class _DiscPainter extends CustomPainter {
   @override
   bool shouldRepaint(_DiscPainter old) =>
       old.radius != radius || old.color != color;
+}
+
+/// Whether this device's saved data belongs to someone who has used Auvy: an
+/// owner is stamped on it (only a signed-in session writes that), it has been
+/// backed up or restored (the watermark an account switch clears), and there is
+/// a library. Such a user never needs onboarding, whatever `has_onboarded` says;
+/// a new account, whose switch wiped the watermark, still gets it.
+bool hasEstablishedLocalUser(SharedPreferences prefs) {
+  final owner = prefs.getString('auvy_data_owner_v1') ?? prefs.getString('auvy_data_owner_id_v1');
+  final watermark = prefs.getInt('cloud_last_backup_ms') ?? 0;
+  final library = prefs.getString('auvy_library_data') ?? '';
+  return owner != null && owner.isNotEmpty && watermark > 0 && library.length > 2;
 }

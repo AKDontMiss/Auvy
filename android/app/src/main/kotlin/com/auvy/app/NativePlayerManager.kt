@@ -58,6 +58,17 @@ class NativePlayerManager(context: Context, private val channel: MethodChannel) 
         // and, crucially, STOPPED. See startPositionTicks and the tick body.
         @Volatile private var positionTick: Runnable? = null
         @Volatile private var positionTicking: Boolean = false
+        // The position feed's last two readings, kept for [recoverAudioJump]: where
+        // the track was just before its audio jumped, whatever the player says after.
+        @Volatile private var tickPosMs: Long = -1
+        @Volatile private var tickAtMs: Long = 0
+        @Volatile private var tickIndex: Int = -1
+        @Volatile private var prevTickPosMs: Long = -1
+        @Volatile private var prevTickAtMs: Long = 0
+        @Volatile private var prevTickIndex: Int = -1
+        // The item last put back after a jump: once per item, so a stream with a
+        // real hole in it plays on instead of looping.
+        @Volatile private var jumpRepairedItem: MediaItem? = null
         // Always points at the MOST RECENT channel, so the single listener /
         // position reporter report to the live engine after a recreation.
         @Volatile private var activeChannel: MethodChannel? = null
@@ -323,6 +334,11 @@ class NativePlayerManager(context: Context, private val channel: MethodChannel) 
         // every toggle, re-applying the saved state. Pitch/speed go straight into
         // PlaybackParameters (kept in sync so setting one preserves the other).
         @Volatile private var equalizer: Equalizer? = null
+
+        /// How loud the music is, for the player cover's glow. Lives in the shared
+        /// player's audio chain (see the renderers factory where the player is
+        /// built); measures only while Dart has metering on.
+        val levelMeter = LevelMeterAudioProcessor()
         @Volatile private var eqEnabled = false
         private val eqBandsDb = FloatArray(5)  // dB per UI band
         // UI band centres in milliHz: 60 / 230 / 910 / 3600 / 14000 Hz.
@@ -507,7 +523,23 @@ class NativePlayerManager(context: Context, private val channel: MethodChannel) 
                 .Builder(appContext)
                 .build()
             bandwidthMeter = meter
-            val p = ExoPlayer.Builder(appContext)
+            // The default renderers with one addition to the audio chain: the level
+            // meter for the cover's glow, which passes the audio through untouched.
+            // Silence skipping and speed stay where they were, after it.
+            val renderers = object : androidx.media3.exoplayer.DefaultRenderersFactory(appContext) {
+                override fun buildAudioSink(
+                    context: Context,
+                    enableFloatOutput: Boolean,
+                    enableAudioTrackPlaybackParams: Boolean,
+                ): androidx.media3.exoplayer.audio.AudioSink =
+                    androidx.media3.exoplayer.audio.DefaultAudioSink.Builder(context)
+                        .setEnableFloatOutput(enableFloatOutput)
+                        .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+                        .setAudioProcessorChain(
+                            androidx.media3.exoplayer.audio.DefaultAudioSink.DefaultAudioProcessorChain(levelMeter))
+                        .build()
+            }
+            val p = ExoPlayer.Builder(appContext, renderers)
                 .setLoadControl(loadControl)
                 .setBandwidthMeter(meter)
                 .setAudioAttributes(audioAttributes, /* handleAudioFocus= */ false)
@@ -531,6 +563,31 @@ class NativePlayerManager(context: Context, private val channel: MethodChannel) 
         // App-managed audio focus (see the companion-object block). Built once,
         // here, since this method runs exactly once per process.
         setupAudioFocus()
+        p.addAnalyticsListener(object : androidx.media3.exoplayer.analytics.AnalyticsListener {
+            override fun onAudioSinkError(
+                eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                audioSinkError: Exception,
+            ) {
+                val jump = audioSinkError as?
+                    androidx.media3.exoplayer.audio.AudioSink.UnexpectedDiscontinuityException
+                    ?: return
+                recoverAudioJump(
+                    p,
+                    (jump.actualPresentationTimeUs - jump.expectedPresentationTimeUs) / 1000,
+                    eventTime.windowIndex,
+                )
+            }
+
+            // The decoder failing or being taken back is what came before the one
+            // jump seen so far; logged so the next one shows its cause.
+            override fun onAudioCodecError(
+                eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                audioCodecError: Exception,
+            ) {
+                android.util.Log.w("AuvyPlayer",
+                    "audio decoder error at ${p.currentPosition}ms: ${audioCodecError.message}")
+            }
+        })
         p.addListener(object : Player.Listener {
             // Playback just started (or resumed) → grab audio focus so OTHER
             // media apps yield to us, and so we START getting focus-change
@@ -774,13 +831,23 @@ class NativePlayerManager(context: Context, private val channel: MethodChannel) 
                     return
                 }
                 val dur = player.duration
+                val posMs = player.currentPosition
+                prevTickPosMs = tickPosMs
+                prevTickAtMs = tickAtMs
+                prevTickIndex = tickIndex
+                tickPosMs = posMs
+                tickAtMs = android.os.SystemClock.elapsedRealtime()
+                tickIndex = player.currentMediaItemIndex
                 activeChannel?.invokeMethod(
                     "onPosition",
                     mapOf(
-                        "positionMs" to player.currentPosition,
+                        "positionMs" to posMs,
                         "durationMs" to (if (dur == C.TIME_UNSET) 0L else dur),
                         "bufferedMs" to player.bufferedPosition,
-                        "isPlaying" to player.isPlaying
+                        "isPlaying" to player.isPlaying,
+                        // Which song this tick is about (Dart drops a tick for a
+                        // song it has already moved on from).
+                        "videoId" to (player.currentMediaItem?.mediaId ?: "")
                     )
                 )
                 // Moving = playing, or buffering while trying to play (playWhenReady). A
@@ -806,6 +873,66 @@ class NativePlayerManager(context: Context, private val channel: MethodChannel) 
             }
         }
         startPositionTicks()
+    }
+
+    /// Puts the track back when its audio jumps ahead by itself.
+    ///
+    /// Seen on the Galaxy (2026-10-17): with the app in the background, Android
+    /// took the Opus decoder back ("Released by resource manager"), ExoPlayer made
+    /// a new one, and the first audio out of it was the track's last moment, so
+    /// "Golden" lost 102 of its 195 seconds and the queue moved on. The audio sink
+    /// reports a jump like that as an UnexpectedDiscontinuityException and carries
+    /// on from the new time. A seek is an expected discontinuity, so this never
+    /// fires for one.
+    ///
+    /// Forward jumps of 2 s or more only (small gaps are normal in some streams).
+    /// Never on a live stream. Once per item, so a stream with a real hole in it
+    /// plays on rather than looping. Only while the item that jumped is still
+    /// playing. The target is where the position feed last had the track, moved on
+    /// by the time since, because the player's own position may already have
+    /// jumped with the audio.
+    private fun recoverAudioJump(p: ExoPlayer, jumpMs: Long, windowIndex: Int) {
+        if (jumpMs < 2_000L) return
+        if (p.currentMediaItemIndex != windowIndex) {
+            android.util.Log.w("AuvyPlayer",
+                "audio jumped ${jumpMs}ms ahead, noticed after its track ended — left as is")
+            return
+        }
+        val dur = p.duration
+        if (p.isCurrentMediaItemLive || p.isCurrentMediaItemDynamic || dur == C.TIME_UNSET) return
+        val item = p.currentMediaItem
+        if (item != null && item === jumpRepairedItem) {
+            android.util.Log.w("AuvyPlayer",
+                "audio jumped ${jumpMs}ms ahead again on the same track — the stream " +
+                    "itself skips here, so it plays on")
+            return
+        }
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (tickIndex != windowIndex || tickPosMs < 0 || now - tickAtMs > 2_000L) {
+            android.util.Log.w("AuvyPlayer",
+                "audio jumped ${jumpMs}ms ahead with no recent position to go back to — left as is")
+            return
+        }
+        val speed = p.playbackParameters.speed
+        var baseMs = tickPosMs
+        var atMs = tickAtMs
+        // The feed may have ticked between the jump and this callback; then the
+        // reading before it is the one from before the jump.
+        val lastStep = (tickPosMs - prevTickPosMs) - ((tickAtMs - prevTickAtMs) * speed).toLong()
+        if (prevTickIndex == windowIndex && prevTickPosMs >= 0 && lastStep > jumpMs / 2) {
+            baseMs = prevTickPosMs
+            atMs = prevTickAtMs
+        }
+        val targetMs = (baseMs + ((now - atMs) * speed).toLong())
+            .coerceAtMost(maxOf(0L, dur - 1_000L))
+            .coerceAtLeast(0L)
+        jumpRepairedItem = item
+        android.util.Log.w("AuvyPlayer",
+            "audio jumped ${jumpMs}ms ahead without a seek (now at ${p.currentPosition}ms " +
+                "of ${dur}ms) — put back to ${targetMs}ms")
+        noteToDart("audio jumped ${jumpMs / 1000}s ahead by itself — put back to " +
+            "${targetMs / 1000}s")
+        p.seekTo(targetMs)
     }
 
     /// Begin (or continue) the 2Hz position feed. Idempotent.
@@ -1420,6 +1547,15 @@ class NativePlayerManager(context: Context, private val channel: MethodChannel) 
                         // in step whatever the call order.
                         player.volume = appVolume * normalizationVolumeScale()
                         result.success(null)
+                    }
+                    "setMetering" -> {
+                        // The player cover's glow follows the music only while it's on screen.
+                        levelMeter.enabled = call.argument<Boolean>("on") ?: false
+                        if (!levelMeter.enabled) levelMeter.level = 0f
+                        result.success(null)
+                    }
+                    "getLevel" -> {
+                        result.success(if (player.isPlaying) levelMeter.level.toDouble() else 0.0)
                     }
                     "setEqualizer" -> {
                         eqEnabled = call.argument<Boolean>("enabled") ?: false

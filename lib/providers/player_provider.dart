@@ -380,6 +380,10 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
   DateTime? _lastPlayingAt;
   DateTime? _deliberatePauseAt;
 
+  /// When the listener last paused from inside the app. The audio handler uses
+  /// it to tell their pause from one an earbud sensor or the system made.
+  DateTime? get lastDeliberatePauseAt => _deliberatePauseAt;
+
   /// How wide the "native just paused us" window is. It's a race between two
   /// callbacks reacting to one hardware event (milliseconds), so two seconds is
   /// generous without catching pauses with other causes. Not private: read from
@@ -415,6 +419,16 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
   // stream"), not three broken tracks — the queue must stop being eaten by
   // auto-skips. Reset on real audible progress (player_system onPosition).
   int _autoAdvanceFailStreak = 0;
+  /// When the player last moved on by itself because a track ended (or failed).
+  /// A Listen Together host reads it: at such a change every listener's mirrored
+  /// queue moves on at the same moment, so there is nothing to wait for.
+  int _lastAutoAdvanceAtMs = 0;
+  int get lastAutoAdvanceAtMs => _lastAutoAdvanceAtMs;
+
+  /// Set by Listen Together: given a song a listener opened, returns true when
+  /// it was handed to the host instead (see playSong). A hook rather than an
+  /// import, since Listen Together already depends on the player.
+  static bool Function(Song song)? listenerPick;
   // Consecutive tracks whose self-heal hit the no-progress cap (fresh URLs keep
   // 403ing). ≥2 in a row = a googlevideo CDN/IP GATE storm (Samsung Wi-Fi flap
   // under Doze), not per-track rot, so hold + back off instead of cascade-
@@ -442,6 +456,11 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
   // ticks until the clock lands near it (or a failsafe passes).
   Duration? _pendingSeekTarget;
   DateTime? _pendingSeekAt;
+
+  /// The native player's last position report, as it came (before the seek
+  /// hold), and when. [_settleAt] checks a seek against it.
+  Duration? _lastNativePosition;
+  DateTime? _lastNativePositionAt;
   StreamSubscription? _connectivitySubscription;
 
   // Podcast sponsor auto-skip

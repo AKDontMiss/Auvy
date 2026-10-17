@@ -1,3 +1,5 @@
+import 'package:auvy/logic/music_link.dart';
+import 'package:auvy/presentation/widgets/open_link_sheet.dart';
 import 'package:auvy/services/listening_policy.dart';
 import 'package:auvy/providers/view_count_provider.dart';
 import 'package:flutter/material.dart';
@@ -96,10 +98,30 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     super.dispose();
   }
 
+  /// The field's text at the last change, to tell a paste from typing.
+  String _lastSearchText = '';
+
   void _onSearchChanged(String query) {
+    // A Spotify, Apple Music or YouTube link pasted in opens it instead of
+    // searching for its text. Only on a paste (many characters at once), so
+    // typing can never trigger it.
+    final grew = query.length - _lastSearchText.length;
+    _lastSearchText = query;
+    if (grew > 10 && _openIfMusicLink(query)) return;
     // Rebuild only: flips the idle↔results branch and the clear button. It rebuilds
     // the whole page, which is why the ranking below is cached.
     setState(() {});
+  }
+
+  bool _openIfMusicLink(String text) {
+    final link = MusicLink.find(text);
+    if (link == null) return false;
+    _searchController.clear();
+    _lastSearchText = '';
+    FocusScope.of(context).unfocus();
+    setState(() {});
+    showOpenLinkSheet(context, link);
+    return true;
   }
 
   // Cached ranking and interleave for the All filter, keyed on the identities it
@@ -720,9 +742,14 @@ return TweenAnimationBuilder<double>(
         child: TextField(
           controller: _searchController,
           focusNode: _searchFocusNode,
+          // The hint and the typed text sit in the middle of the pill, between
+          // the two 48 px icons, whichever icon is showing: without this the
+          // text was placed by its padding alone and sat off centre.
+          textAlignVertical: TextAlignVertical.center,
           onChanged: _onSearchChanged,
           textInputAction: TextInputAction.search, // Keyboard shows "Search"
           onSubmitted: (query) {
+            if (_openIfMusicLink(query)) return;
             if (query.trim().isNotEmpty) {
               HapticService.medium();
               // Save to history only when submitted from the search box.
@@ -733,11 +760,18 @@ return TweenAnimationBuilder<double>(
               FocusScope.of(context).unfocus();
             }
           },
-          style: const TextStyle(color: Colors.white),
+          style: const TextStyle(color: Colors.white, fontSize: 15.5),
           decoration: InputDecoration(
-            hintText: "What do you want to listen to?",
-            hintStyle: const TextStyle(color: Colors.white60),
+            // Says that a link works here too: a pasted Spotify, Apple Music or
+            // YouTube link opens it (see _openIfMusicLink).
+            hintText: "Search, or paste a music link",
+            // Same size as the typed text, so neither jumps when one replaces the other.
+            hintStyle: const TextStyle(color: Colors.white60, fontSize: 15.5),
+            hintMaxLines: 1,
+            isDense: true,
             prefixIcon: const Icon(Icons.search_rounded, color: Colors.white38),
+            prefixIconConstraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+            suffixIconConstraints: const BoxConstraints(minWidth: 48, minHeight: 48),
             suffixIcon: _searchController.text.isNotEmpty
                 ? IconButton(
                     tooltip: 'Clear search',
@@ -776,7 +810,7 @@ return TweenAnimationBuilder<double>(
                     ),
                   ),
             border: InputBorder.none,
-            contentPadding: const EdgeInsets.symmetric(vertical: 15),
+            contentPadding: const EdgeInsets.symmetric(vertical: 14),
           ),
         ),
       ),

@@ -20,8 +20,11 @@ Two limits of a free Apple ID to know up front:
 
 * **The signature lasts 7 days.** SideStore renews it in the background, which
   is why SideStore has to stay installed.
-* **Only 3 sideloaded apps at a time**, and SideStore itself is one of them. If
-  you already sideload two other apps, remove one first.
+* **Only 3 sideloaded apps at a time**, and SideStore itself is one of them.
+  Auvy's home-screen widget counts as one too, so SideStore, Auvy and its widget
+  fill all three. If you sideload other apps, SideStore offers to leave app
+  extensions out when installing Auvy: say yes and everything works except the
+  widget (Siri, the icon's shortcuts and opening links are part of the app).
 
 ---
 

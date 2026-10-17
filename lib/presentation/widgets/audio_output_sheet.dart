@@ -1,9 +1,14 @@
+import 'dart:async';
 import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:auvy/providers/player_provider.dart';
 import 'package:auvy/providers/theme_provider.dart';
 import 'package:auvy/services/audio_output_service.dart';
+import 'package:auvy/services/cloud_sync_service.dart';
+import 'package:auvy/services/device_presence_service.dart';
+import 'package:auvy/services/listening_policy.dart';
 import 'package:auvy/services/haptic_service.dart';
 import 'package:auvy/core/app_colors.dart';
 import 'package:auvy/presentation/widgets/animated_toast.dart';
@@ -17,6 +22,9 @@ import 'package:auvy/presentation/widgets/animated_toast.dart';
 /// A car stereo is a Bluetooth or USB output like any other while connected, so
 /// it appears here by its own name. Android Auto is separate — the car takes over
 /// the screen and browses Auvy's media tree, and needs nothing from this sheet.
+///
+/// Below them, the account's other phones (see DevicePresenceService): what each
+/// is playing, its controls, and moving playback between them.
 Future<void> showAudioOutputSheet(BuildContext context) {
   return showModalBottomSheet<void>(
     context: context,
@@ -237,6 +245,7 @@ class _AudioOutputSheetState extends ConsumerState<_AudioOutputSheet>
                     onTap: () => _pick(d),
                   )),
             ],
+            _OtherDevicesSection(themeColor: themeColor),
             Divider(color: Colors.white.withOpacity(0.07), height: 22),
             // On Android the last row opens the system panel, whose contents differ by
             // version and skin, so its wording promises nothing specific. On iOS it raises
@@ -312,6 +321,257 @@ class _DeviceRow extends StatelessWidget {
       trailing: active
           ? Icon(Icons.check_circle_rounded, color: themeColor, size: 20)
           : null,
+    );
+  }
+}
+
+/// The account's other phones, live: what each is playing, play/pause and skip
+/// for it, and moving playback here or there. Only with cloud sync signed in;
+/// everything shown was sealed with the account's key on the way. Opening it
+/// is what makes the other phones report (see DevicePresenceService), so it
+/// costs nothing while closed.
+class _OtherDevicesSection extends ConsumerStatefulWidget {
+  final Color themeColor;
+  const _OtherDevicesSection({required this.themeColor});
+
+  @override
+  ConsumerState<_OtherDevicesSection> createState() => _OtherDevicesSectionState();
+}
+
+class _OtherDevicesSectionState extends ConsumerState<_OtherDevicesSection> {
+  Timer? _tick;
+  String? _busy;
+
+  /// Play/pause as just asked of a phone, shown until that phone's own report
+  /// arrives (a second or three), so the button doesn't look ignored.
+  final Map<String, ({bool playing, int atMs})> _asked = {};
+
+  @override
+  void initState() {
+    super.initState();
+    DevicePresenceService.instance.startWatching();
+    // "Checking…" gives way after a few seconds, "playing" runs out with the
+    // song, and "last used" ages: redrawn now and then.
+    _tick = Timer.periodic(const Duration(seconds: 2), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _tick?.cancel();
+    DevicePresenceService.instance.stopWatching();
+    super.dispose();
+  }
+
+  Future<void> _run(String key, Future<String?> Function() action) async {
+    if (_busy != null) return;
+    HapticService.selection();
+    setState(() => _busy = key);
+    String? problem;
+    try {
+      problem = await action();
+    } catch (_) {
+      problem = "Couldn't reach that device";
+    }
+    if (!mounted) return;
+    setState(() => _busy = null);
+    if (problem != null) AnimatedToast.message(problem);
+  }
+
+  Future<String?> _command(AuvyLiveDevice d, String name) async {
+    final ok = await DevicePresenceService.instance.send(d.id, name);
+    if (ok && (name == 'play' || name == 'pause')) {
+      _asked[d.id] = (playing: name == 'play', atMs: DateTime.now().millisecondsSinceEpoch);
+    }
+    return ok ? null : "Couldn't reach ${d.name}";
+  }
+
+  Future<String?> _playHere(AuvyLiveDevice d) {
+    final player = ref.read(playerProvider.notifier);
+    return DevicePresenceService.instance.bringPlaybackFrom(d, takeOver: player.takeOverHandoff);
+  }
+
+  Future<String?> _sendThere(AuvyLiveDevice d) {
+    final player = ref.read(playerProvider.notifier);
+    return DevicePresenceService.instance.sendPlaybackTo(d, pauseHere: () async {
+      if (player.currentState.isPlaying) player.togglePlay(haptic: false);
+    });
+  }
+
+  static String _ago(int ms) {
+    final m = ms ~/ 60000;
+    if (m < 1) return 'just now';
+    if (m < 60) return '$m min ago';
+    final h = m ~/ 60;
+    if (h < 24) return '$h h ago';
+    final days = h ~/ 24;
+    return days == 1 ? 'yesterday' : '$days days ago';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (CloudSyncService.instance.accountDoc == null) return const SizedBox.shrink();
+    final hasSongHere = ref.watch(playerProvider.select((s) => s.currentSong != null));
+    return ValueListenableBuilder<List<AuvyLiveDevice>>(
+      valueListenable: DevicePresenceService.instance.others,
+      builder: (context, devices, _) {
+        final dim = Colors.white.withOpacity(0.66);
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 14, 20, 4),
+              child: Text('YOUR OTHER DEVICES',
+                  style: TextStyle(
+                      color: Colors.white.withOpacity(0.5),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 1.1)),
+            ),
+            if (devices.isEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 2, 20, 6),
+                child: Text(
+                    'Phones signed in to this account show up here when Auvy is open on them.',
+                    style: TextStyle(color: dim, fontSize: 12)),
+              ),
+            for (final d in devices) _row(d, hasSongHere),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _row(AuvyLiveDevice d, bool hasSongHere) {
+    final theme = widget.themeColor;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    // Running phones answer within a second or two of the list opening.
+    final live = d.here;
+    final checking = !live && now - DevicePresenceService.instance.watchStartedMs < 5000;
+    final asked = _asked[d.id];
+    final stillAsked = asked != null && d.updatedMs < asked.atMs && now - asked.atMs < 6000;
+    final playing = live && (stillAsked ? asked.playing : d.playingAt(now));
+    final song = d.private
+        ? 'Private session'
+        : (d.artist.isEmpty ? d.title : '${d.title} · ${d.artist}');
+    final status = checking
+        ? 'Checking…'
+        : !live
+            ? 'Not open right now · last used ${_ago(now - d.updatedMs)}'
+            : playing
+                ? 'Playing · $song'
+                : (d.hasSong || d.private)
+                    ? 'Paused · $song'
+                    : 'Open, nothing playing';
+    final canControl = live && (d.hasSong || d.private);
+    final canBring = live && d.handoff != null;
+    final canSend = live && hasSongHere && !ListeningPolicy.privateSession;
+    final busy = _busy;
+    final iconColor = playing ? theme : Colors.white.withOpacity(0.75);
+    final isPhone = d.platform == 'ios' || d.platform == 'android';
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(12, 10, 6, 8),
+        decoration: BoxDecoration(
+          color: playing ? theme.withOpacity(0.10) : Colors.white.withOpacity(0.04),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+              color: playing ? theme.withOpacity(0.30) : Colors.white.withOpacity(0.06)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                    isPhone
+                        ? (d.platform == 'ios' ? Icons.phone_iphone_rounded : Icons.phone_android_rounded)
+                        : Icons.devices_rounded,
+                    color: iconColor,
+                    size: 22),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(d.name.isEmpty ? 'Another device' : d.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                              color: playing ? theme : Colors.white,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700)),
+                      const SizedBox(height: 2),
+                      Text(status,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(color: Colors.white.withOpacity(0.66), fontSize: 11.5)),
+                    ],
+                  ),
+                ),
+                if (canControl) ...[
+                  IconButton(
+                    tooltip: playing ? 'Pause on ${d.name}' : 'Play on ${d.name}',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: busy != null
+                        ? null
+                        : () => _run('${d.id}:toggle', () => _command(d, playing ? 'pause' : 'play')),
+                    icon: Icon(playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                        color: Colors.white),
+                  ),
+                  IconButton(
+                    tooltip: 'Next on ${d.name}',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: busy != null || d.private ? null : () => _run('${d.id}:next', () => _command(d, 'next')),
+                    icon: Icon(Icons.skip_next_rounded,
+                        color: d.private ? Colors.white.withOpacity(0.3) : Colors.white),
+                  ),
+                ],
+              ],
+            ),
+            if (canBring || canSend || (!live && !checking))
+              Padding(
+                padding: const EdgeInsets.only(left: 30, top: 2),
+                child: Wrap(
+                  spacing: 4,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    if (canBring)
+                      TextButton.icon(
+                        onPressed: busy != null ? null : () => _run('${d.id}:here', () => _playHere(d)),
+                        style: TextButton.styleFrom(
+                            foregroundColor: theme, visualDensity: VisualDensity.compact),
+                        icon: busy == '${d.id}:here'
+                            ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                            : const Icon(Icons.south_west_rounded, size: 16),
+                        label: const Text('Play here'),
+                      ),
+                    if (canSend)
+                      TextButton.icon(
+                        onPressed: busy != null ? null : () => _run('${d.id}:there', () => _sendThere(d)),
+                        style: TextButton.styleFrom(
+                            foregroundColor: theme, visualDensity: VisualDensity.compact),
+                        icon: busy == '${d.id}:there'
+                            ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                            : const Icon(Icons.north_east_rounded, size: 16),
+                        label: const Text('Send there'),
+                      ),
+                    if (!live && !checking)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                        child: Text('Open Auvy there to control it',
+                            style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 11)),
+                      ),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ),
     );
   }
 }

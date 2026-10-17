@@ -16,6 +16,11 @@ To install it on a phone, see [INSTALL.md](../INSTALL.md).
 | `AuvyMP4Repair.swift` | (used by the player) | Fixes the duration of YouTube's fragmented MP4 audio, which iOS otherwise reads as twice its real length. |
 | `AuvyCookies.swift` | `com.auvy.app/cookies` | YouTube sign-in in a WKWebView, and reading the session cookies (including HttpOnly ones). |
 | `AuvySystemChannels.swift` | the small channels | Haptics, toasts, region, screen flags, app icon, backup files, the Files app, audio output, the wake-up alarm (AlarmKit), refresh reminders, What's New, WebP encoding for custom covers (Google's libwebp, a CocoaPods dependency: iOS can read WebP but not write it), and honest "not available" answers for Android-only features. |
+| `AuvyAudioTap.swift` | (used by the player) | The equaliser (five bands, the same as Android's), the loudness trim and the level meter behind the player cover's glow when it follows the music, in an MTAudioProcessingTap on each track. Attached only while one of them is on. |
+| `AuvyCommands.swift` | `com.auvy.app/commands` | Commands from outside the app's screens: Siri and Shortcuts, the widgets and Control Center, the icon's long-press menu and `auvy://` links (see below). Held until Dart is ready. |
+| `AuvyIntents.swift` | (App Intents) | The Siri and Shortcuts actions and the phrases Siri knows without setup. iOS 17 and newer. |
+| `../Shared/` | (both targets) | What the app and the widget share: the now-playing state in the App Group, and the widget buttons' intents. |
+| `../AuvyWidget/` | (widget extension) | The home-screen, lock-screen and Control Center widgets. iOS 17 and newer (Control Center: 18). |
 
 Why tracks are fetched to a file rather than streamed: AVFoundation parsed
 YouTube's audio as double its real length when it arrived through a streaming
@@ -28,21 +33,56 @@ or reduced on iPhone:
 
 - **Identifying audio from another app** isn't possible (iOS has no screen-audio
   capture). Song recognition uses the microphone instead.
-- **The quick-settings tile and home-screen widget** have no iOS version.
+- **The quick-settings tile** is Android's; the iPhone has a Control Center
+  button instead (iOS 18).
 - **The wake-up alarm** needs iOS 26 or newer (AlarmKit), and earlier versions
   hide it. iOS rings it itself, over the lock screen and through silent mode,
   with the first 30 seconds of the song rather than the whole track, and there
   is no snooze yet (it would need a Live Activity widget).
-- **Equalizer, pitch, skip-silence and loudness normalization** aren't
-  supported by AVPlayer; the app reports them as unavailable.
+- **Pitch and skip-silence** aren't supported by AVPlayer; the app reports
+  them as unavailable. The equaliser and loudness normalisation work (through an
+  audio tap, AuvyAudioTap.swift).
 - **Choosing the audio output** goes through the system AirPlay / Bluetooth
   picker.
 - **Updates** can't be installed by the app itself; it opens SideStore instead
   (see INSTALL.md).
 
 **What's New notifications** with Auvy closed use a background app refresh
-task (`com.auvy.app.whatsnew`); iOS decides when it runs, typically a few times
-a day for an app in use, so a notification can come hours after a release.
+task (`com.auvy.app.whatsnew`, read back from Info.plist at run time because
+SideStore renames it for each Apple ID); iOS decides when it runs, typically a
+few times a day for an app in use, so a notification can come hours after a
+release.
+
+**Siri, Shortcuts and widgets** (iOS 17 and newer). Siri knows phrases such as
+"Shuffle my liked songs in Auvy", "Play Weekly Discovery in Auvy", "Play
+\<playlist\> in Auvy", "Search Auvy", "Skip this song in Auvy" and "Like this
+song in Auvy" without any setup; the Shortcuts app has the same actions, plus
+"Play a Music Link" for a Share Sheet shortcut. The widgets' buttons run inside
+Auvy (AudioPlaybackIntents), so they work from the home screen, the lock screen
+and Control Center. If iOS has fully closed Auvy, a command opens it and then
+plays. `auvy://` links do the same from anywhere: `auvy://collection/liked?shuffle=1`,
+`auvy://playlist?name=…`, `auvy://search?q=…`, `auvy://open?url=<music link>`,
+`auvy://toggle`, `auvy://next`.
+
+**Links from other apps.** A free Apple ID can't give Auvy a share
+extension (it would be a fourth app next to SideStore, Auvy and its widget), so
+on iPhone links come in three ways: copy a link and open Auvy, which offers to
+open it (`UIPasteboard.detectPatterns` checks for a link without reading it,
+so iOS's paste prompt only appears when you tap Open); paste it into Search;
+or an "Open in Auvy" Shortcut in the Share menu (Settings → Other apps has the
+steps). Android adds "Share → Auvy".
+
+**The widget's data** travels through an App Group. The published IPA carries
+it in an ad-hoc signature (tool/package_sideload_ipa.sh) and SideStore renames
+it for the installing Apple ID's team; the app reads the actual group from its
+own signature (AuvyNowPlayingStore.swift). On a free Apple ID the widget takes
+one of the three app slots; [INSTALL.md](../INSTALL.md) explains the choice.
+
+**Large settings live in files.** iOS's settings store has a 4 MB limit, and
+past it iOS stops saving it reliably ("Attempting to store >= 4194304 bytes …
+direct mode"). The library, listening history and taste data are kept in files
+under Application Support instead (lib/core/large_prefs_store.dart), behind the
+same SharedPreferences API.
 
 iPhone only: **refresh reminders.** The SideStore signature lasts 7 days on a
 free Apple ID, and Auvy stops opening if a renewal is missed. Auvy reads the
@@ -95,7 +135,7 @@ its backend.
 
 ```sh
 ./tool/build_ios.sh release
-./tool/package_sideload_ipa.sh 1.3.0    # -> build/sideload/app-release.ipa + source.json
+./tool/package_sideload_ipa.sh 1.4.0    # -> build/sideload/app-release.ipa + source.json
 ```
 
 It also writes the release's `source.json` (the SideStore source) from the

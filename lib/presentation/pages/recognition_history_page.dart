@@ -277,8 +277,11 @@ class _RecognitionHistoryPageState
     final busy = _resolving == e.title;
     // Long-press = the same track menu every other list in the app has, and it
     // charges visibly like the rest of them now. See HoldToOpen.
+    // The ListTile's own ripple is the hold animation here, so HoldToOpen
+    // draws none of its own.
     return HoldToOpen(
       borderRadius: BorderRadius.circular(10),
+      ripple: false,
       onHold: busy ? null : () => _openMenu(e),
       child: ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 6),

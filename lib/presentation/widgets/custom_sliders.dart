@@ -1,6 +1,9 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
 
+import 'package:auvy/presentation/widgets/slider_clock.dart';
+import 'package:auvy/presentation/widgets/visible_clock_hold.dart';
+
 // The "liquid" style lives in squiggly_wavy_slider.dart (AuvyFluidSlider), shared
 // by the player page and the settings preview.
 
@@ -248,6 +251,9 @@ class _SegmentedPainter extends CustomPainter {
 /// Shared hit-testing for the painter-based sliders below. Every one of them had
 /// the identical two-line drag/tap handler copy-pasted; the seek maths is the
 /// same for all, only the painting differs.
+/// What a paused moving bar listens to instead of [SliderClock]: never changes.
+final ValueNotifier<int> _stillClock = ValueNotifier<int>(0);
+
 class _SeekArea extends StatelessWidget {
   final double height;
   final ValueChanged<double> onChanged;
@@ -321,28 +327,22 @@ class CometSlider extends StatefulWidget {
   const CometSlider({super.key, required this.progress, required this.themeColor, this.isPlaying = true, required this.onChanged});
   @override State<CometSlider> createState() => _CometSliderState();
 }
-class _CometSliderState extends State<CometSlider> with SingleTickerProviderStateMixin {
-  // Ticks only while playing. The paused frame freezes the phase anyway, so a
-  // running controller there rebuilt the slider every vsync (120 Hz on
-  // ProMotion) to draw the same picture.
-  late final AnimationController _c = AnimationController(
-      vsync: this, duration: const Duration(milliseconds: 2600));
-  @override void initState() { super.initState(); _sync(); }
+class _CometSliderState extends State<CometSlider> with VisibleClockHold {
+  @override void acquireClock() => SliderClock.instance.acquire();
+  @override void releaseClock() => SliderClock.instance.release();
+  // Moves only while playing, on the shared 30-a-second clock (see SliderClock).
+  static const int _periodMs = 2600;
+  @override void initState() { super.initState(); wantClock(widget.isPlaying); }
   @override void didUpdateWidget(covariant CometSlider old) {
     super.didUpdateWidget(old);
-    if (old.isPlaying != widget.isPlaying) _sync();
+    wantClock(widget.isPlaying);
   }
-  void _sync() {
-    if (widget.isPlaying) {
-      if (!_c.isAnimating) _c.repeat();
-    } else {
-      _c.stop();
-    }
-  }
-  @override void dispose() { _c.dispose(); super.dispose(); }
-  @override Widget build(BuildContext context) => AnimatedBuilder(
-        animation: _c,
-        builder: (_, __) => _SeekArea(
+  @override Widget build(BuildContext context) => ValueListenableBuilder<int>(
+        // A still notifier while paused, so a clock someone else holds can't
+        // rebuild a bar that isn't moving.
+        valueListenable:
+            widget.isPlaying ? SliderClock.instance.elapsedMs : _stillClock,
+        builder: (_, __, ___) => _SeekArea(
           height: 44,
           onChanged: widget.onChanged,
           painter: _CometPainter(
@@ -350,7 +350,7 @@ class _CometSliderState extends State<CometSlider> with SingleTickerProviderStat
               themeColor: widget.themeColor,
               // Freezing the phase while paused stops the sparks mid-drift
               // instead of leaving them swimming behind a stopped playhead.
-              phase: widget.isPlaying ? _c.value : 0.0,
+              phase: widget.isPlaying ? SliderClock.instance.loop(_periodMs) : 0.0,
               isPlaying: widget.isPlaying),
         ),
       );
@@ -508,28 +508,22 @@ class PulseSlider extends StatefulWidget {
   const PulseSlider({super.key, required this.progress, required this.themeColor, this.isPlaying = true, required this.onChanged});
   @override State<PulseSlider> createState() => _PulseSliderState();
 }
-class _PulseSliderState extends State<PulseSlider> with SingleTickerProviderStateMixin {
-  // Ticks only while playing. The paused frame freezes the phase anyway, so a
-  // running controller there rebuilt the slider every vsync (120 Hz on
-  // ProMotion) to draw the same picture.
-  late final AnimationController _c = AnimationController(
-      vsync: this, duration: const Duration(milliseconds: 1500));
-  @override void initState() { super.initState(); _sync(); }
+class _PulseSliderState extends State<PulseSlider> with VisibleClockHold {
+  @override void acquireClock() => SliderClock.instance.acquire();
+  @override void releaseClock() => SliderClock.instance.release();
+  // Moves only while playing, on the shared 30-a-second clock (see SliderClock).
+  static const int _periodMs = 1500;
+  @override void initState() { super.initState(); wantClock(widget.isPlaying); }
   @override void didUpdateWidget(covariant PulseSlider old) {
     super.didUpdateWidget(old);
-    if (old.isPlaying != widget.isPlaying) _sync();
+    wantClock(widget.isPlaying);
   }
-  void _sync() {
-    if (widget.isPlaying) {
-      if (!_c.isAnimating) _c.repeat(reverse: true);
-    } else {
-      _c.stop();
-    }
-  }
-  @override void dispose() { _c.dispose(); super.dispose(); }
-  @override Widget build(BuildContext context) => AnimatedBuilder(
-        animation: _c,
-        builder: (_, __) => _SeekArea(
+  @override Widget build(BuildContext context) => ValueListenableBuilder<int>(
+        // A still notifier while paused, so a clock someone else holds can't
+        // rebuild a bar that isn't moving.
+        valueListenable:
+            widget.isPlaying ? SliderClock.instance.elapsedMs : _stillClock,
+        builder: (_, __, ___) => _SeekArea(
           height: 44,
           onChanged: widget.onChanged,
           painter: _PulsePainter(
@@ -538,7 +532,7 @@ class _PulseSliderState extends State<PulseSlider> with SingleTickerProviderStat
               // Settles to mid-breath when paused rather than freezing wherever
               // the cycle happened to be, so the paused state looks intentional.
               beat: widget.isPlaying
-                  ? Curves.easeInOut.transform(_c.value)
+                  ? Curves.easeInOut.transform(SliderClock.instance.pingPong(_periodMs))
                   : 0.35),
         ),
       );
@@ -589,36 +583,30 @@ class FlowSlider extends StatefulWidget {
   const FlowSlider({super.key, required this.progress, required this.themeColor, this.isPlaying = true, required this.onChanged});
   @override State<FlowSlider> createState() => _FlowSliderState();
 }
-class _FlowSliderState extends State<FlowSlider> with SingleTickerProviderStateMixin {
-  // Ticks only while playing. The paused frame freezes the phase anyway, so a
-  // running controller there rebuilt the slider every vsync (120 Hz on
-  // ProMotion) to draw the same picture.
-  late final AnimationController _c = AnimationController(
-      vsync: this, duration: const Duration(milliseconds: 1700));
-  @override void initState() { super.initState(); _sync(); }
+class _FlowSliderState extends State<FlowSlider> with VisibleClockHold {
+  @override void acquireClock() => SliderClock.instance.acquire();
+  @override void releaseClock() => SliderClock.instance.release();
+  // Moves only while playing, on the shared 30-a-second clock (see SliderClock).
+  static const int _periodMs = 1700;
+  @override void initState() { super.initState(); wantClock(widget.isPlaying); }
   @override void didUpdateWidget(covariant FlowSlider old) {
     super.didUpdateWidget(old);
-    if (old.isPlaying != widget.isPlaying) _sync();
+    wantClock(widget.isPlaying);
   }
-  void _sync() {
-    if (widget.isPlaying) {
-      if (!_c.isAnimating) _c.repeat();
-    } else {
-      _c.stop();
-    }
-  }
-  @override void dispose() { _c.dispose(); super.dispose(); }
-  @override Widget build(BuildContext context) => AnimatedBuilder(
-        animation: _c,
-        builder: (_, __) => _SeekArea(
+  @override Widget build(BuildContext context) => ValueListenableBuilder<int>(
+        // A still notifier while paused, so a clock someone else holds can't
+        // rebuild a bar that isn't moving.
+        valueListenable:
+            widget.isPlaying ? SliderClock.instance.elapsedMs : _stillClock,
+        builder: (_, __, ___) => _SeekArea(
           height: 44,
           onChanged: widget.onChanged,
           painter: _FlowPainter(
               progress: widget.progress,
               themeColor: widget.themeColor,
-              // Frozen while paused. See the note above; the stillness is the
-              // signal, so it must not drift on at half speed.
-              phase: widget.isPlaying ? _c.value : -1.0,
+              // Frozen while paused: the stillness is the signal, so it must
+              // not drift on at half speed.
+              phase: widget.isPlaying ? SliderClock.instance.loop(_periodMs) : -1.0,
               isPlaying: widget.isPlaying),
         ),
       );

@@ -151,6 +151,10 @@ class ConnectivityNotifier extends StateNotifier<ConnectivityState> {
   /// all. An explicit flag is unambiguous where a value comparison is not.
   bool _sawFirstEvent = false;
 
+  /// How long "no network" must last before the app treats itself as offline.
+  static const Duration offlineGrace = Duration(milliseconds: 1500);
+  Timer? _offlineTimer;
+
   ConnectivityNotifier() : super(ConnectivityState()) {
     _init();
   }
@@ -189,17 +193,25 @@ class ConnectivityNotifier extends StateNotifier<ConnectivityState> {
       // A late event can arrive after the notifier was disposed (a provider rebuild
       // on sign-in or restore).
       if (!mounted) return;
-      state = state.copyWith(
-        isConnected: isConnected,
-        isWifi: isWifi,
-        lastDisconnected: !isConnected ? DateTime.now() : state.lastDisconnected,
-      );
-
-      if (isConnected) {
-        print("Back online: ${isWifi ? 'WiFi' : 'Mobile Data'}");
-      } else {
-        print("WARN: Gone offline");
+      if (!isConnected) {
+        // Going offline counts only if it lasts: the platform often reports "no
+        // network" for a moment (seen on the iPhone 21 times in a day, each
+        // "Gone offline" and "Back online" in the same millisecond), and each
+        // flip told every offline-aware part of the app to stand down.
+        _offlineTimer?.cancel();
+        _offlineTimer = Timer(offlineGrace, () {
+          if (!mounted || !state.isConnected) return;
+          state = state.copyWith(isConnected: false, isWifi: false, lastDisconnected: DateTime.now());
+          print("WARN: Gone offline");
+        });
+        return;
       }
+      final wasPendingOffline = _offlineTimer?.isActive ?? false;
+      _offlineTimer?.cancel();
+      _offlineTimer = null;
+      if (wasPendingOffline && state.isConnected && isWifi == state.isWifi) return; // a blip
+      state = state.copyWith(isConnected: true, isWifi: isWifi);
+      print("Back online: ${isWifi ? 'WiFi' : 'Mobile Data'}");
     });
 
     // 3. Initial check. connectivity_plus v5+ returns a List<ConnectivityResult>
@@ -248,7 +260,21 @@ class ConnectivityNotifier extends StateNotifier<ConnectivityState> {
   @override
   void dispose() {
     _connectivitySub?.cancel();
+    _offlineTimer?.cancel();
     super.dispose();
+  }
+
+  /// Re-reads the saved Data Saver mode and offline switch after a restore,
+  /// without rebuilding the notifier: a rebuild re-subscribes to the platform,
+  /// which reports "no network" for a moment first.
+  Future<void> reloadFromStorage() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    final mode = prefs.getInt('data_saver_mode') ?? 0;
+    state = state.copyWith(
+      dataSaverMode: DataSaverMode.values[mode.clamp(0, DataSaverMode.values.length - 1)],
+      isInOfflineMode: prefs.getBool(kOfflineMode) ?? false,
+    );
   }
 }
 

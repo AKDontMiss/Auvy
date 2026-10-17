@@ -62,7 +62,10 @@ class RecentPlaylistsNotifier extends StateNotifier<List<RecentPlaylist>> {
 
   static const _prefsKey = 'recent_playlists_v1';
   static const _originKey = 'recent_playlist_origins_v1';
-  static const _cap = 15;
+  // 40, not 15: the library's "Recently played" sort reads this too, and
+  // fifteen was too short a memory for it. The Home mosaic takes only the few
+  // it shows.
+  static const _cap = 40;
   static const _originCap = 400;
 
   /// Maps a played track's id AND its title|artist signature to the KEY of the

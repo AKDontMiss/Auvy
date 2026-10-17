@@ -283,6 +283,18 @@ extension PlayerPlaybackController on PlayerNotifier {
     Set<String>? conformChain,
   }) async {
     if (!mounted) return;
+    // A listener in Listen Together opening something: it changes what everyone
+    // hears, so the host plays it. Not the session's own switches, nor this
+    // device's queue moving on, nor the second half of an audio-only swap.
+    if (isManual &&
+        !isNextOrPrev &&
+        !viaQueueAdvance &&
+        !alreadyPlayingNatively &&
+        conformChain == null &&
+        source != 'Listen Together' &&
+        (PlayerNotifier.listenerPick?.call(inputSong) ?? false)) {
+      return;
+    }
     // A new track cancels any pending error-recovery retry, so an old retry can't
     // later reload the now-current track. (See _handlePlaybackError.)
     _recoveryTimer?.cancel();

@@ -217,7 +217,7 @@ class _SwipeActionTileState extends ConsumerState<SwipeActionTile>
           widget.enableTapShrink ? () => setState(() => _scale = 1.0) : null,
       onTap: _onTap,
       // Long-press goes through HoldToOpen, which draws the hold as it charges and fires
-      // when the ring completes, instead of a GestureDetector's onLongPress (which gave
+      // when the charge completes, instead of a GestureDetector's onLongPress (which gave
       // no feedback). Done here so every caller that passes `onLongPress` gets it.
       // HoldToOpen listens to raw pointer events without claiming a gesture and
       // abandons the charge once the finger moves, so the horizontal swipe still works.

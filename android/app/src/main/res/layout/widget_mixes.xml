@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- "Your Mixes", a row of four: Liked Songs, Weekly Discovery, My Top 50 and
+     everything shuffled, one tap each (MixesWidgetProvider). The iPhone has the
+     same widget. Icons take the accent at render time. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+    <ImageView android:layout_width="match_parent" android:layout_height="match_parent"
+        android:scaleType="fitXY" android:src="@drawable/widget_bg" android:importantForAccessibility="no" />
+    <ImageView android:layout_width="match_parent" android:layout_height="match_parent"
+        android:scaleType="fitXY" android:src="@drawable/widget_sheen" android:importantForAccessibility="no" />
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="horizontal"
+        android:padding="6dp">
+        <LinearLayout
+            android:id="@+id/mix_liked"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:layout_margin="4dp"
+            android:background="@drawable/widget_tile"
+            android:gravity="start|center_vertical"
+            android:orientation="vertical"
+            android:padding="10dp">
+            <ImageView
+                android:id="@+id/mix_liked_icon"
+                android:layout_width="20dp"
+                android:layout_height="20dp"
+                android:src="@drawable/ic_mix_liked"
+                android:importantForAccessibility="no" />
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:ellipsize="end"
+                android:fontFamily="sans-serif-medium"
+                android:maxLines="2"
+                android:text="Liked Songs"
+                android:textColor="#FFFFFFFF"
+                android:textSize="11.5sp" />
+        </LinearLayout>
+        <LinearLayout
+            android:id="@+id/mix_weekly"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:layout_margin="4dp"
+            android:background="@drawable/widget_tile"
+            android:gravity="start|center_vertical"
+            android:orientation="vertical"
+            android:padding="10dp">
+            <ImageView
+                android:id="@+id/mix_weekly_icon"
+                android:layout_width="20dp"
+                android:layout_height="20dp"
+                android:src="@drawable/ic_mix_weekly"
+                android:importantForAccessibility="no" />
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:ellipsize="end"
+                android:fontFamily="sans-serif-medium"
+                android:maxLines="2"
+                android:text="Weekly Discovery"
+                android:textColor="#FFFFFFFF"
+                android:textSize="11.5sp" />
+        </LinearLayout>
+        <LinearLayout
+            android:id="@+id/mix_top"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:layout_margin="4dp"
+            android:background="@drawable/widget_tile"
+            android:gravity="start|center_vertical"
+            android:orientation="vertical"
+            android:padding="10dp">
+            <ImageView
+                android:id="@+id/mix_top_icon"
+                android:layout_width="20dp"
+                android:layout_height="20dp"
+                android:src="@drawable/ic_mix_top"
+                android:importantForAccessibility="no" />
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:ellipsize="end"
+                android:fontFamily="sans-serif-medium"
+                android:maxLines="2"
+                android:text="My Top 50"
+                android:textColor="#FFFFFFFF"
+                android:textSize="11.5sp" />
+        </LinearLayout>
+        <LinearLayout
+            android:id="@+id/mix_all"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:layout_margin="4dp"
+            android:background="@drawable/widget_tile"
+            android:gravity="start|center_vertical"
+            android:orientation="vertical"
+            android:padding="10dp">
+            <ImageView
+                android:id="@+id/mix_all_icon"
+                android:layout_width="20dp"
+                android:layout_height="20dp"
+                android:src="@drawable/ic_mix_shuffle"
+                android:importantForAccessibility="no" />
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:ellipsize="end"
+                android:fontFamily="sans-serif-medium"
+                android:maxLines="2"
+                android:text="Shuffle All"
+                android:textColor="#FFFFFFFF"
+                android:textSize="11.5sp" />
+        </LinearLayout>
+    </LinearLayout>
+</FrameLayout>

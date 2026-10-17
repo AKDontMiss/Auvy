@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The player widget's Up Next rows (widget_player_xl.xml). -->
+<resources>
+    <style name="AuvyWidgetNextRow">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:paddingTop">3dp</item>
+        <item name="android:paddingBottom">3dp</item>
+        <item name="android:ellipsize">end</item>
+        <item name="android:maxLines">1</item>
+        <item name="android:textColor">#E0FFFFFF</item>
+        <item name="android:textSize">13sp</item>
+    </style>
+</resources>

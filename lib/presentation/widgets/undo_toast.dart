@@ -29,6 +29,10 @@ class UndoToast {
     VoidCallback? onExpire,
     IconData icon = Icons.delete_outline_rounded,
     Duration duration = const Duration(seconds: 4),
+    // The button: "Undo" unless the pill offers something else (the copied
+    // link's "Open").
+    String actionLabel = 'Undo',
+    IconData actionIcon = Icons.undo_rounded,
   }) {
     final overlay = Overlay.of(context, rootOverlay: true);
     final container = ProviderScope.containerOf(context, listen: false);
@@ -54,6 +58,8 @@ class UndoToast {
         key: _pillKey,
         text: text,
         icon: icon,
+        actionLabel: actionLabel,
+        actionIcon: actionIcon,
         duration: duration,
         bottom: bottom,
         accent: container.read(themeProvider),
@@ -126,6 +132,8 @@ class UndoToast {
 class _UndoPill extends StatefulWidget {
   final String text;
   final IconData icon;
+  final String actionLabel;
+  final IconData actionIcon;
   final Duration duration;
   final double bottom;
   final Color accent;
@@ -135,6 +143,8 @@ class _UndoPill extends StatefulWidget {
     super.key,
     required this.text,
     required this.icon,
+    required this.actionLabel,
+    required this.actionIcon,
     required this.duration,
     required this.bottom,
     required this.accent,
@@ -276,11 +286,11 @@ class _UndoPillState extends State<_UndoPill> with TickerProviderStateMixin {
                               child: Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  Icon(Icons.undo_rounded,
+                                  Icon(widget.actionIcon,
                                       color: widget.accent, size: 16),
                                   const SizedBox(width: 6),
                                   Text(
-                                    'Undo',
+                                    widget.actionLabel,
                                     style: TextStyle(
                                       color: widget.accent,
                                       fontSize: 13,

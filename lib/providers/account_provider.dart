@@ -25,6 +25,7 @@ import 'package:auvy/services/catalog_api_client.dart';
 import 'package:auvy/logic/session_cookie_manager.dart';
 import 'package:auvy/logic/session_auth_service.dart';
 import 'package:auvy/services/cloud_sync_service.dart';
+import 'package:auvy/services/device_presence_service.dart';
 import 'package:auvy/services/database_service.dart';
 import 'package:auvy/providers/intelligence_provider.dart';
 import 'package:auvy/providers/player_provider.dart';
@@ -42,6 +43,7 @@ import 'package:auvy/services/listening_policy.dart';
 // A restored alarm has to be re-armed with AlarmManager, not just remembered.
 import 'package:auvy/services/alarm_service.dart';
 import 'package:auvy/services/play_tally.dart';
+import 'package:auvy/services/play_devices.dart';
 import 'package:auvy/services/set_log.dart';
 import 'package:auvy/logic/audio_cache_manager.dart';
 import 'package:firebase_auth/firebase_auth.dart' as fb_auth;
@@ -1274,12 +1276,17 @@ class AccountNotifier extends StateNotifier<AccountState> {
           await _ref.read(libraryProvider.notifier).reloadFromStorage();
           await _rebuildDerivedCollections();
           await _applyRestoredSettings();
-          // Rebuild the home feed: Quick Picks comes from the taste profile, and on a fresh
-          // install the feed was built (and cached) from an empty profile before this
-          // restore landed. Unawaited so it doesn't delay entering the app.
-          try {
-            _ref.read(homeProvider.notifier).refreshHome();
-          } catch (_) {}
+          // Rebuild the home feed when this was the device's first restore: Quick Picks
+          // comes from the taste profile, and on a fresh install the feed was built (and
+          // cached) from an empty profile before this restore landed. Not after every
+          // restore: that refetched the whole feed each time the other phone had pushed;
+          // the daily rotation and pull-to-refresh keep it current. Unawaited so it
+          // doesn't delay entering the app.
+          if (CloudSyncService.instance.lastRestoreWasFirst) {
+            try {
+              _ref.read(homeProvider.notifier).refreshHome();
+            } catch (_) {}
+          }
         }
         return true;
       }
@@ -1373,7 +1380,17 @@ class AccountNotifier extends StateNotifier<AccountState> {
   /// [_userDataPrefixes] (the whole `intel_*` family). `auvy_lib::` is included
   /// because a cloud restore writes per-playlist parts under it
   /// (library_sync_split).
-  static const List<String> _userDataPrefixes = ['intel_', 'auvy_lib::'];
+  static const List<String> _userDataPrefixes = [
+    'intel_',
+    'auvy_lib::',
+    // The sync records of what this phone last pushed and which backup parts it
+    // holds, per account. Left behind (they were until 2026-10-17), a sign-out
+    // and sign-in had the emptied phone believe it still held the old library:
+    // the restore took the emptied sections as current, and the next push sent
+    // the emptiness up over the backup.
+    CloudSyncService.pushedSigPrefix,
+    CloudSyncService.appliedGensPrefix,
+  ];
   static const List<String> _userDataKeys = [
     // Library, home-mosaic recents and their play-origin map.
     'auvy_library_data',
@@ -1431,6 +1448,9 @@ class AccountNotifier extends StateNotifier<AccountState> {
     SetLog.prefsKey,
     PlayTally.prefsKey,
     PlayTally.baselineKey,
+    //   play devices  which device each of the old account's plays was on.
+    PlayDevices.ownKey,
+    PlayDevices.othersKey,
     CloudSyncService.shardIdKey,
   ];
 
@@ -1486,6 +1506,7 @@ class AccountNotifier extends StateNotifier<AccountState> {
     // read their pref once per process, so removing the keys isn't enough.
     try { await SetLog.instance.reset(); } catch (e) { failed.add('set log ($e)'); }
     try { await PlayTally.instance.reset(); } catch (e) { failed.add('play tally ($e)'); }
+    try { await PlayDevices.instance.reset(); } catch (e) { failed.add('play devices ($e)'); }
     // The remembered cloud credential is the OUTGOING account's uid and
     // encryption key. It is bound to that account's cookie tag, so it would be
     // rejected rather than misapplied — but a departing account's key has no
@@ -1863,7 +1884,10 @@ class AccountNotifier extends StateNotifier<AccountState> {
       _ref.invalidate(hapticsProvider);
     } catch (_) {}
     try {
-      _ref.invalidate(connectivityProvider);
+      // Re-read, not rebuilt: a rebuilt notifier re-subscribes to the platform,
+      // which reports "no network" for a moment (a fake offline blip after
+      // every restore, seen on the iPhone).
+      await _ref.read(connectivityProvider.notifier).reloadFromStorage();
     } catch (_) {}
     try {
       _ref.invalidate(pinnedPodcastsProvider);
@@ -2435,7 +2459,24 @@ class AccountNotifier extends StateNotifier<AccountState> {
       // Log a failed final push: the wipe below would destroy data that existed nowhere
       // else. Logout still proceeds; the user is entitled to sign out.
       try {
+        // A reorder saves a moment after the drag; it goes in this push.
+        try {
+          await _ref.read(libraryProvider.notifier).flushPendingLibrarySave();
+        } catch (_) {}
         await CloudSyncService.instance.pushNow();
+        // Held: another device pushed since this one last synced, so that push
+        // sent nothing. Merge its copy in (the merge keeps this device's own
+        // unpushed edits) and push again. The wipe used to follow straight away,
+        // while the catch-up the hold starts was still running (seen 2026-10-17
+        // on the iPhone), so edits not yet backed up would have gone with it.
+        // Bounded, since a sign-out must not hang.
+        if (CloudSyncService.instance.needsRemoteMerge) {
+          await () async {
+            await restoreCloudBackup();
+            await CloudSyncService.instance.pushNow();
+          }()
+              .timeout(const Duration(seconds: 20));
+        }
       } catch (e) {
         print('ALERT: LOGOUT: the final backup FAILED ($e). The wipe below will '
             'destroy anything played since the last successful push, and it '
@@ -2443,6 +2484,12 @@ class AccountNotifier extends StateNotifier<AccountState> {
             'refusable.');
       }
     }
+
+    // Off the account's device list too, while still signed in to it (see
+    // DevicePresenceService.leave). Bounded, like the rest of sign-out.
+    try {
+      await DevicePresenceService.instance.leave().timeout(const Duration(seconds: 5));
+    } catch (_) {}
 
     // Deregister/revoke active device session from Worker BEFORE wiping cookies & session.
     // This immediately drops this device from the active device list on other devices.
@@ -2563,7 +2610,23 @@ class AccountNotifier extends StateNotifier<AccountState> {
 
   /// Manually pulls down the latest cloud backup, merging history/shards and
   /// updating live providers to converge multi-device state.
-  Future<bool> restoreCloudBackup({bool force = false}) async {
+  /// One restore at a time: a request while one runs gets that one's result.
+  /// A held push starts a catch-up from the screen while sign-out may want the
+  /// same merge; two restores at once would race over the same preferences.
+  Future<bool>? _restoreInFlight;
+
+  Future<bool> restoreCloudBackup({bool force = false}) {
+    final running = _restoreInFlight;
+    if (running != null && !force) return running;
+    final run = _restoreCloudBackup(force: force);
+    _restoreInFlight = run;
+    run.whenComplete(() {
+      if (identical(_restoreInFlight, run)) _restoreInFlight = null;
+    }).ignore();
+    return run;
+  }
+
+  Future<bool> _restoreCloudBackup({bool force = false}) async {
     if (!CloudSyncService.isAvailable) return false;
     final uid = CloudSyncService.instance.currentUserId;
     if (uid == null) return false;
@@ -2575,9 +2638,12 @@ class AccountNotifier extends StateNotifier<AccountState> {
       await _ref.read(libraryProvider.notifier).reloadFromStorage();
       await _rebuildDerivedCollections();
       await _applyRestoredSettings();
-      try {
-        _ref.read(homeProvider.notifier).refreshHome();
-      } catch (_) {}
+      // Only a first restore rebuilds the home feed (see the sign-in path above).
+      if (CloudSyncService.instance.lastRestoreWasFirst) {
+        try {
+          _ref.read(homeProvider.notifier).refreshHome();
+        } catch (_) {}
+      }
     }
     return restored;
   }

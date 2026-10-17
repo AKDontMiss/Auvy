@@ -3,6 +3,12 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
+import 'package:auvy/presentation/widgets/slider_clock.dart';
+import 'package:auvy/presentation/widgets/visible_clock_hold.dart';
+
+/// What the paused wave listens to instead of [SliderClock]: never changes.
+final ValueNotifier<int> _still = ValueNotifier<int>(0);
+
 /// The "liquid" seek bar: a squiggly sine wave that flows while playing and
 /// flattens when paused. Used by both the player page and the settings
 /// live-preview so the two always look identical.
@@ -26,38 +32,22 @@ class AuvyFluidSlider extends StatefulWidget {
   State<AuvyFluidSlider> createState() => _AuvyFluidSliderState();
 }
 
-class _AuvyFluidSliderState extends State<AuvyFluidSlider> with SingleTickerProviderStateMixin {
-  late AnimationController _phaseController;
+class _AuvyFluidSliderState extends State<AuvyFluidSlider> with VisibleClockHold {
+  @override void acquireClock() => SliderClock.instance.acquire();
+  @override void releaseClock() => SliderClock.instance.release();
+  // Flows only while playing, on the shared 30-a-second clock (see SliderClock).
+  static const int _periodMs = 3000;
 
   @override
   void initState() {
     super.initState();
-    _phaseController = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 3),
-    );
-
-    if (widget.isPlaying) {
-      _phaseController.repeat();
-    }
+    wantClock(widget.isPlaying);
   }
 
   @override
   void didUpdateWidget(covariant AuvyFluidSlider oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.isPlaying != oldWidget.isPlaying) {
-      if (widget.isPlaying) {
-        _phaseController.repeat();
-      } else {
-        _phaseController.stop();
-      }
-    }
-  }
-
-  @override
-  void dispose() {
-    _phaseController.dispose();
-    super.dispose();
+    wantClock(widget.isPlaying);
   }
 
   void _handleDragUpdate(Offset localPosition, double maxWidth) {
@@ -75,17 +65,21 @@ class _AuvyFluidSliderState extends State<AuvyFluidSlider> with SingleTickerProv
       onHorizontalDragStart: (details) => _handleDragUpdate(details.localPosition, context.size!.width),
       onHorizontalDragUpdate: (details) => _handleDragUpdate(details.localPosition, context.size!.width),
       onTapDown: (details) => _handleDragUpdate(details.localPosition, context.size!.width),
-      // RepaintBoundary keeps the 60fps wave repaint from dirtying the rest
-      // of the page it sits on.
+      // RepaintBoundary keeps the wave's repaint from dirtying the rest of the
+      // page it sits on.
       child: RepaintBoundary(
-        child: AnimatedBuilder(
-          animation: _phaseController,
-          builder: (context, child) {
+        child: ValueListenableBuilder<int>(
+          // Paused, the wave is a flat line, so nothing it draws moves.
+          valueListenable:
+              widget.isPlaying ? SliderClock.instance.elapsedMs : _still,
+          builder: (context, _, child) {
             return CustomPaint(
               size: const Size(double.infinity, 44),
               painter: _FluidSliderPainter(
                 progress: widget.value,
-                phase: _phaseController.value * 2 * math.pi,
+                phase: widget.isPlaying
+                    ? SliderClock.instance.loop(_periodMs) * 2 * math.pi
+                    : 0,
                 isPlaying: widget.isPlaying,
                 activeColor: activePaintColor,
                 inactiveColor: inactivePaintColor,

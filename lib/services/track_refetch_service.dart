@@ -14,6 +14,8 @@ import 'package:auvy/providers/search_provider.dart';
 import 'package:auvy/services/lyrics_service.dart';
 import 'package:auvy/services/search_service.dart';
 import 'package:auvy/logic/media_artwork_cache.dart';
+import 'package:auvy/providers/intelligence_provider.dart';
+import 'package:auvy/logic/audio_cache_manager.dart';
 
 /// What a refetch did, for the toast.
 class TrackRefetchOutcome {
@@ -142,6 +144,16 @@ class TrackRefetchService {
       _evictImage(fresh.image);
       ref.read(playerProvider.notifier).applyRefreshedMetadata(fresh);
       ref.read(libraryProvider.notifier).replaceSongEverywhere(fresh);
+      // And the two copies that outlived the refresh before (2026-10-17): the
+      // audio cache's entry, whose saved cover won on the next play, and the
+      // taste data's, which the home page and Quick Picks show.
+      try {
+        final replaced = await AudioCacheManager().applyRefreshedMetadata(fresh);
+        _evictImage(replaced);
+      } catch (_) {}
+      try {
+        ref.read(intelligenceProvider.notifier).applyRefreshedMetadata(fresh);
+      } catch (_) {}
     }
 
     // 4. Lyrics, last

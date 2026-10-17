@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # Package the built Runner.app as the IPA a SideStore source points at.
 #
-# The published IPA must carry no signature: a development-signed app embeds
-# the team name, the UDIDs of every device on the provisioning profile, and a
-# certificate named after the Apple ID's email address. SideStore re-signs
-# every app with the installing user's own Apple ID, so none of that is needed.
+# The published IPA must carry no signature from the builder: a
+# development-signed app embeds the team name, the UDIDs of every device on the
+# provisioning profile, and a certificate named after the Apple ID's email
+# address. SideStore re-signs every app with the installing user's own Apple ID,
+# so none of that is needed. What it does need is the App Group the widget
+# shares with the app, which it reads from the signature's entitlements, so the
+# builder's signature is replaced with an ad-hoc one carrying only that.
 #
 # Usage:
 #   ./tool/build_ios.sh release
@@ -45,7 +48,8 @@ mkdir -p "$WORK/Payload" "$OUT_DIR"
 cp -R "$APP" "$WORK/Payload/Runner.app"
 STAGED="$WORK/Payload/Runner.app"
 
-rm -f "$STAGED/embedded.mobileprovision"
+# The app's and the widget's: each bundle carries its own.
+find "$STAGED" -name embedded.mobileprovision -delete
 
 # Every Mach-O, deepest first, so a framework is unsigned before its parent.
 while IFS= read -r -d '' f; do
@@ -64,14 +68,56 @@ while IFS= read -r -d '' f; do
   fi
 done < <(find "$STAGED" -type f -print0)
 
+# ── An ad-hoc signature carrying only the App Group ─────────────────────────
+# SideStore learns which App Groups an app needs from the entitlements in its
+# signature, and an unsigned app has none: the widget would install unable to
+# see what's playing. So each bundle is signed AD HOC ("-"): no certificate, no
+# team, no profile, nothing about the builder, just code hashes and, for the
+# app and the widget, the one group in their entitlements files. SideStore
+# replaces this signature with the installing Apple ID's own, keeping the group
+# (renamed for that team). Frameworks first, then the widget, then the app.
+APP_ENT="ios/Runner/Runner.entitlements"
+WIDGET_ENT="ios/AuvyWidget/AuvyWidget.entitlements"
+[[ -f "$APP_ENT" && -f "$WIDGET_ENT" ]] || { echo "missing $APP_ENT or $WIDGET_ENT" >&2; exit 1; }
+if grep -Eq '[A-Z0-9]{10}\.' "$APP_ENT" "$WIDGET_ENT"; then
+  echo "REFUSING — an entitlements file names a team id; it must carry the group only" >&2; exit 1
+fi
+while IFS= read -r -d '' fw; do
+  codesign --force --sign - --timestamp=none "$fw" >/dev/null
+done < <(find "$STAGED" -type d \( -name '*.framework' -o -name '*.dylib' \) -print0 | sort -rz)
+while IFS= read -r -d '' lib; do
+  codesign --force --sign - --timestamp=none "$lib" >/dev/null
+done < <(find "$STAGED/Frameworks" -maxdepth 1 -type f -name '*.dylib' -print0 2>/dev/null)
+for appex in "$STAGED"/PlugIns/*.appex; do
+  [[ -d "$appex" ]] || continue
+  codesign --force --sign - --timestamp=none --entitlements "$WIDGET_ENT" "$appex" >/dev/null
+done
+codesign --force --sign - --timestamp=none --entitlements "$APP_ENT" "$STAGED" >/dev/null
+
 # ── Refuse to publish anything that still identifies the builder ────────────
 fail=0
 if find "$STAGED" -name embedded.mobileprovision | grep -q .; then
   echo "REFUSING — a provisioning profile survived" >&2; fail=1
 fi
-if find "$STAGED" -type d -name _CodeSignature | grep -q .; then
-  echo "REFUSING — a _CodeSignature directory survived" >&2; fail=1
-fi
+# Every signature must be the ad-hoc one made above: no team, no authority.
+while IFS= read -r -d '' sig; do
+  bundle="$(dirname "$sig")"
+  info="$(codesign -dv "$bundle" 2>&1 || true)"
+  if ! grep -q '^Signature=adhoc' <<<"$info" || ! grep -q '^TeamIdentifier=not set' <<<"$info" \
+      || grep -q '^Authority=' <<<"$info"; then
+    echo "REFUSING — not an ad-hoc signature: ${bundle#$STAGED/}" >&2; fail=1
+  fi
+done < <(find "$STAGED" -type d -name _CodeSignature -print0)
+for ent in "$STAGED" "$STAGED"/PlugIns/*.appex; do
+  [[ -d "$ent" ]] || continue
+  granted="$(codesign -d --entitlements - --xml "$ent" 2>/dev/null || true)"
+  if ! grep -q 'group.com.auvy.app' <<<"$granted"; then
+    echo "REFUSING — ${ent#$WORK/} lost its App Group entitlement" >&2; fail=1
+  fi
+  if grep -Eq 'team-identifier|application-identifier|get-task-allow|[A-Z0-9]{10}\.' <<<"$granted"; then
+    echo "REFUSING — ${ent#$WORK/} carries an identity in its entitlements" >&2; fail=1
+  fi
+done
 # Any leftover certificate chain names Apple's developer CA.
 if grep -rlaq 'Apple Development:\|Apple Worldwide Developer Relations' "$STAGED"; then
   echo "REFUSING — a signing certificate survived in:" >&2

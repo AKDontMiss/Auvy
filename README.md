@@ -6,9 +6,9 @@
 
 ### Music, podcasts and radio for Android and iPhone
 
-**~109k lines of Dart** across 209 files &middot; **14 Kotlin** files on media3/ExoPlayer
-&middot; **7 Swift** files on AVFoundation &middot; a **4k-line Cloudflare Worker** in front
-of the third-party APIs &middot; **1,100+ tests** in 100 files
+**~115k lines of Dart** across 220 files &middot; **18 Kotlin** files on media3/ExoPlayer
+&middot; **13 Swift** files on AVFoundation &middot; a **4k-line Cloudflare Worker** in front
+of the third-party APIs &middot; **1,410+ tests** in 139 files
 
 <br/>
 
@@ -68,12 +68,13 @@ Three problems drove almost every hard decision here, and they are the three I
 expect to meet again closer to the metal.
 
 **A boundary between two languages, which is where the interesting bugs live.**
-Dart drives 14 Kotlin files (and 7 Swift files on iPhone) over platform
+Dart drives 18 Kotlin files (and 13 Swift files on iPhone) over platform
 channels, including a
 `ChunkedDataSource` written against media3/ExoPlayer so a track can be
 re-resolved mid-playback without the player noticing. Every bug that took days
-sat on that seam, in the gap between what one side promised and what the other
-assumed.
+sat on that seam. The subtlest: shared preferences are cached in memory per
+isolate, so a value Kotlin wrote stayed invisible to a running Dart isolate
+until it reloaded, and the feature only appeared to work after a restart.
 
 **Code that has to keep running when nobody is looking at it.** Audio survives
 the screen going off and the OS actively trying to sleep the process. That takes a
@@ -138,17 +139,39 @@ flowchart LR
 Blue is Dart, purple is native (Kotlin on Android, Swift on iPhone), green is
 storage, grey is outside the phone. The closed-app box is native too where it
 has to be: iOS and Android each run the What's New check from their own
-background scheduler. Two things in there are worth pointing at.
+background scheduler.
+
+Following one song through it, from the tap to the speaker:
+
+1. You tap a song. The Dart side builds the queue and asks YouTube for the
+   track's stream, picking an audio quality from the throughput it has
+   actually measured on this connection.
+2. If the track is already in the play cache or your downloads, it plays from
+   disk and nothing goes over the network.
+3. Otherwise the native player fetches the audio straight from YouTube's CDN.
+   On Android, ExoPlayer streams it in byte ranges and keeps a copy in the play
+   cache as it goes. On iPhone the whole track is fetched to a file first,
+   because AVFoundation misreads YouTube's audio when it arrives as a stream.
+   Either way, if the URL expires partway through, the native side asks Dart
+   for a fresh one and carries on from the same byte.
+4. Lyrics, artwork and other metadata come through the Worker and are cached
+   on the phone, so a replay costs nothing.
+5. About half a minute in, the song counts as a play: the listening data on
+   the phone updates, and that is what the home feed, Weekly Discovery and
+   My Top 50 are built from.
+6. Before the song ends, the next one is already buffered, so the change is
+   gapless.
+7. If cloud backup is on, a few minutes later whatever changed is encrypted on
+   the phone and uploaded. Your other phone picks it up the next time it
+   opens.
+
+One thing in there is worth pointing at.
 
 **Audio does not go through the Worker.** Dart resolves a stream URL, then the
 native side fetches the bytes itself in ranges. Proxying tens of megabytes of
 audio per album through a Worker would be slow and would cost money for nothing.
 The Worker only ever carries small metadata responses, which is also why it can
 cache them at the edge.
-
-**The API keys only exist on the Worker.** The app ships none, so a forked build
-supplies its own or those features sit inert. That is the reason the box in the
-middle exists at all.
 
 The feature list further down was the easy half. These are the parts I got wrong first
 and then had to understand properly.
@@ -173,32 +196,20 @@ rotated. Nearly all of the playback code is about detecting which of those is
 happening and recovering without the listener hearing it, with bounded retries
 and escalating backoff so a genuinely dead stream stops costing requests.
 
-**Crossing a language boundary.** The UI is Dart, the player is Kotlin on
-media3/ExoPlayer, and background recognition runs in a headless Dart isolate with
-no screen at all. Three processes' worth of state has to agree. The subtlest bug
-I have found in this project lived exactly there: shared preferences are cached
-in memory per isolate, so a value written by Kotlin was invisible to a running
-Dart isolate until it reloaded, so the feature only appeared to work after
-restarting the app.
-
 **An API gateway, and key custody.** A Cloudflare Worker sits in front of every
-third-party API. It holds the keys so they are not in the APK, enforces a method
-allowlist, and caches at the edge with per-route TTLs. Getting the cache key
+third-party API. It holds the keys, so the app ships none (a fork supplies its
+own or those features sit inert), enforces a method allowlist, and caches at the
+edge with per-route TTLs. Getting the cache key
 wrong there is instructive: Cloudflare caches in front of the Worker, so a cached
 response means your code never ran.
 
-**Picking the storage primitive to match the question.** The Worker is not
-stateless (it keeps a user registry and enforces rate limits), and both started
-on the wrong primitive. The roster lived in KV, so "how many accounts are
-pending" meant walking the keyspace and issuing one read per key, which gets
-slower with every signup; it is now one grouped `SELECT` over an index in D1,
-SQLite at the edge. The limiters ran on the Cache API and were documented as
-approximate, because a per-colo read-modify-write loses increments under
-concurrency; they now run in a Durable Object, which is single-threaded per name,
-so the counter is atomic without a lock. The limiter deliberately **fails open**:
-it guards a budget, the access gate is separate, and an unreachable counter must
-not lock people out of their own music. Migration is dual-write with a read
-preference, so it was reversible the whole way.
+**Picking the storage primitive to match the question.** The Worker keeps a user
+registry and rate limits, and both started on the wrong primitive. The roster
+lived in KV, so counting pending accounts meant one read per key; it is now one
+grouped `SELECT` in D1. The limiters ran on the Cache API, which loses increments
+under concurrency; they now run in a Durable Object, single-threaded per name, so
+the counter is atomic without a lock. The limiter deliberately fails open: an
+unreachable counter must not lock people out of their own music.
 
 **Sync, and the limits you find at the edges.** The library backs up encrypted to
 Firestore, chunked across documents because a single document has a 1 MiB cap
@@ -215,49 +226,42 @@ per-device log of decisions. Each push also carries what's playing, so a phone
 that opens idle picks up the song where the other left off, walked forward
 through the queue by the time that passed if the other was still playing.
 
+The hardest lesson came from signing out. A catch-up that finished just after
+the wipe told the emptied phone it was up to date, and its next backup sent an
+empty library over the real one. The other phone still had everything and put
+it back, because the rules are now explicit: a phone with none of the library
+never backs up before it has restored, a phone that has the library refuses a
+backup with none of it, and a wipe takes the sync records with it.
+
 **Some signal processing.** Song recognition builds an audio fingerprint the way
 Shazam's does: FFT the microphone input, pick spectral peaks, hash them into
 time-invariant pairs. That part is a derived work of SongRec by way of Metrolist,
 which is also why this project is GPL-3.0.
 
 **Knowing what happened, without a debugger.** This is the piece I would point
-at if asked what is unusual here. Auvy can record its own activity and export it
-as a redacted text file, from an ordinary release build, with no cable and no
-developer mode.
+at if asked what is unusual here. An ordinary release build can record its own
+activity and export it as a redacted text file, with no cable and no developer
+mode. Release builds swallow log output (each line is a synchronous platform
+write, and on hot paths that costs frames), so the recorder taps the app's single
+`print` interceptor above that gate. It is off until you turn it on, costs one
+boolean per line while off, writes on a timer rather than per line, and strips
+anything token-shaped on the way out.
 
-It works because the recorder taps the app's single `print` interceptor ABOVE the
-release gate. Release builds deliberately swallow log output: every call is a
-synchronous platform-log write on hot paths like the recommendation engine and
-the player, and shipping them costs real frames. The recorder sits above that
-test, so a normal user's build can still produce a transcript while staying
-silent to the system log.
+Its one blind spot taught me something: the transcript held exactly what Dart
+printed, so everything the Kotlin side logged was missing. Audio focus was the
+clearest case. Another app taking focus is the best explanation for "the music
+paused by itself", it was carefully logged natively, and it appeared zero times
+in any export. A handful of rare, decisive native events (losing focus, a refused
+stream) now have a narrow route into the transcript; nothing per chunk or per
+tick, because that route wakes the Dart isolate.
 
-It is off until you turn it on, costs one boolean per line while off, buffers in
-memory and writes on a timer rather than per line, and strips anything
-token-shaped on the way out.
+Almost everything I fixed in the last stretch came from reading those exports
+rather than guessing: a cache evicting fifty times a day where eight would do, a
+setting that had silently stopped syncing for weeks, a stream format refused
+because two code paths asked for it differently. None of them produced a crash
+or anything a user could have described.
 
-That design has one blind spot, and finding it taught me something. Tapping the
-Dart interceptor means the transcript contains exactly what Dart printed, so the
-Kotlin side, which logs to the system log like any Android code, was absent from
-it entirely. Audio focus was the clearest case: a phone call or another app
-taking focus is the single best explanation for "the music paused by itself", it
-was carefully logged natively, and it appeared *zero* times in any export. The
-same switch now also starts the CPU and memory sampler, and a handful of native
-events get a narrow route into the transcript. It's narrow on purpose: that
-route crosses the platform boundary and wakes the Dart isolate, so it only
-carries rare, decisive things like losing audio focus or a stream being refused,
-and nothing that happens per chunk or per tick.
-
-Almost everything I fixed in the last stretch of this project came from reading
-one of those exports rather than from guessing: a cache evicting fifty times a
-day where eight would do, a setting that had silently stopped syncing for weeks,
-a stream format being refused because two code paths asked for it differently.
-None of those produced a crash, an error dialog, or anything a user could have
-described. The headless recognition isolate reports which phase it reached for
-the same reason: a background job with no screen that simply stops tells you
-nothing at all.
-
-**Testing what a type cannot express.** There are over a thousand tests. Some assert on the
+**Testing what a type cannot express.** There are over 1,300 tests. Some assert on the
 source text itself, because several rules here are conventions the compiler
 cannot check. A preference filed under the wrong type is silently skipped at
 backup time, so a test derives the correct grouping instead of trusting me to
@@ -300,17 +304,18 @@ instruction was wrong.
 | Crossfade | Adjustable fade between tracks |
 | Skip silence | Trims dead air |
 | Normalise loudness | Evens out a mixed queue |
-| Equaliser | Five bands, plus pitch and tempo (Android) |
+| Equaliser | Five bands on both phones, plus pitch and tempo (Android) |
 | Sleep timer | At a set time, or end of track |
 | Background | Keeps playing through Doze and screen-off |
 | Resume | Same track and position after a restart, or where your other phone left off |
+| Your other devices | See what your other phone is playing, control it, or move the music between them, live |
 
 ### Library
 
 | | |
 |---|---|
 | Collections | Playlists, albums, artists, liked songs |
-| Your ordering | Custom order and custom covers |
+| Your ordering | Sort by recently added, recently played, A to Z or most songs, or arrange your own order; custom covers. Pinned items and built-in folders sit apart |
 | My Top 50 | Ranked by real listen counts |
 | Keep fresh | A playlist that swaps in new suggested songs weekly or daily; yours never leave |
 | Downloads | Offline, in a folder your file manager can see |
@@ -350,7 +355,10 @@ instruction was wrong.
 | Scrobbling | Last.fm, ListenBrainz |
 | Refresh reminders | iPhone: a notification before the SideStore signature runs out |
 | Android Auto | Browse and play in the car |
-| Widget | Controls on the home screen (Android) |
+| Widgets | Now Playing in small, medium and large (with Up Next): where it's playing from, progress, play, skip and like; tap the song for its playlist or album. Your Mixes: four lists, one tap each. iPhone: lock screen and Control Center too |
+| Siri and Shortcuts | iPhone: "Shuffle my liked songs in Auvy", "Play Weekly Discovery in Auvy", any playlist by name, search and play |
+| Shortcuts on the icon | Long-press the icon for Liked Songs, Weekly Discovery, My Top 50 or Search. Android: pin any playlist to the home screen, and a Quick Settings play/pause tile |
+| Open links | Spotify, Apple Music, YouTube and YouTube Music links play the match: share them to Auvy (Android), copy one and open Auvy, paste it into Search, or add the "Open in Auvy" Shortcut to the Share menu (iPhone) |
 | Your year in music | Wrapped-style summary, made on device |
 | Data usage | What the app spent, broken down |
 | Diagnostic log | Record what the app did and export it as a redacted text file. Off by default |
@@ -361,7 +369,7 @@ instruction was wrong.
 |---|---|
 | Accent colour | Six of them, or follow each song's cover. The launcher icon follows your pick |
 | Pure black | For OLED |
-| Player | Cover shape, the glow around it, the background, progress bar style, controls colour |
+| Player | Cover shape, the glow around it (it can pulse with the music), the background, progress bar style, controls colour |
 | Mini-player | Four styles: Card, Cover colour, Capsule, Fill |
 | List spacing | Compact, comfortable or spacious |
 | Haptics | On or off |
@@ -399,14 +407,14 @@ Step-by-step instructions, including the one-time SideStore setup, are in
 ## Known limits
 
 - Built for phones; there's no tablet layout.
-- On iPhone a few Android features aren't available (equaliser, recognising
-  another app's audio, the widget), and the wake-up alarm needs iOS 26. See
-  [ios/README.md](ios/README.md).
+- On iPhone a few Android features aren't available (pitch, skip silence,
+  recognising another app's audio), and the wake-up alarm needs iOS 26. Siri,
+  Shortcuts and the widgets need iOS 17. See [ios/README.md](ios/README.md).
 - You need a signed-in Google account for the catalogue to work properly.
-- Two phones on one account sync through backups: one picks up where the other
-  left off when it opens, not live. A live device switch, Spotify Connect style
-  (choose which phone plays, control it from the other), is a possible
-  improvement.
+- Two phones on one account share their library, history and settings through
+  the encrypted backup, so changes reach the other phone when it next syncs
+  rather than instantly. What's playing is live: "Your other devices" shows
+  and controls the other phone while its device list is open.
 - Forks need their own keys. See below.
 
 ---

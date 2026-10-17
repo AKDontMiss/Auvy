@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter/widgets.dart'
     show WidgetsBinding, AppLifecycleState;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -7,16 +8,25 @@ import 'package:audio_service/audio_service.dart';
 import 'package:auvy/providers/player_provider.dart';
 import 'package:auvy/core/native_audio_engine.dart';
 import 'package:auvy/providers/library_provider.dart';
+import 'package:auvy/providers/theme_provider.dart';
 import 'package:auvy/data/dummy_data.dart' show Song;
 import 'package:auvy/services/widget_service.dart';
+import 'package:auvy/presentation/widgets/auvy_image.dart';
+import 'package:auvy/services/app_commands.dart';
+import 'package:auvy/services/device_presence_service.dart';
+import 'package:auvy/services/music_link_resolver.dart';
+import 'package:auvy/logic/music_link.dart';
 import 'package:auvy/services/listening_policy.dart';
-import 'package:auvy/logic/library_integrity.dart' show kSystemLibraryTitles, isFreshReserveKey;
+import 'package:auvy/services/audio_output_service.dart';
+import 'package:auvy/logic/library_integrity.dart'
+    show kSystemLibraryTitles, kWeeklyDiscoveryTitle, isFreshReserveKey;
 import 'package:auvy/logic/track_identity.dart';
 import 'package:auvy/services/search_service.dart';
 import 'package:auvy/logic/media_kind.dart';
 
 /// Handles every playback control from outside the app: notification and lock
-/// screen, headset buttons, Android Auto, Bluetooth devices and Google Assistant.
+/// screen, headset buttons, Android Auto, Bluetooth devices, voice search, and the
+/// commands Siri, Shortcuts, widgets and tiles send (see [AppCommands]).
 ///
 /// audio_service registers this handler with the OS, which then calls play(),
 /// pause(), skipToNext() and so on. It does not play audio itself; it forwards
@@ -38,6 +48,27 @@ class AuvyAudioHandler extends BaseAudioHandler with QueueHandler {
   // Signature of the last broadcast. broadcastState() runs on every player state
   // change, so identical broadcasts are skipped to avoid needless platform calls.
   String? _lastBroadcastSig;
+
+  // Where the last broadcast put the track, when, and whether it was moving: the
+  // system (lock screen, notification, watch, Bluetooth) moves the progress on
+  // from these by itself, so a playing track needs a new broadcast only when the
+  // position jumps (see [positionJumped]).
+  int _lastBroadcastPosMs = 0;
+  int _lastBroadcastAtMs = 0;
+  bool _lastBroadcastMoving = false;
+
+  /// Whether [posMs] is off from where the system thinks the track is by more
+  /// than a normal tick's drift: a seek, a restart, a heal. The progress itself
+  /// is extrapolated by the system from the last broadcast, so the per-second
+  /// broadcasts the position used to force (four media-session calls a second,
+  /// fanned out to the lock screen, watches and Bluetooth headphones) only
+  /// repeated what it already knew.
+  @visibleForTesting
+  static bool positionJumped({required int lastPosMs, required int lastAtMs, required bool moving,
+      required double speed, required int posMs, required int nowMs}) {
+    final expected = lastPosMs + (moving ? ((nowMs - lastAtMs) * speed).round() : 0);
+    return (posMs - expected).abs() > 2500;
+  }
 
   // True after stop() ended the session. Without it, the next state change would
   // re-post the media notification the user just dismissed. Cleared when playback
@@ -71,6 +102,15 @@ class AuvyAudioHandler extends BaseAudioHandler with QueueHandler {
   /// a process Android restarted just to deliver a stray media key.
   bool _playedInThisProcess = false;
 
+  /// When playback last stopped for a reason other than the listener pausing in
+  /// the app: a headset or lock-screen pause, Android taking audio focus, a
+  /// device change. See [isEarbudBounce].
+  DateTime? _autoPausedAt;
+
+  /// When [pause] last ran (headset, lock screen, Siri, a widget). Its toggle
+  /// stamps the in-app "deliberate" pause too, so this is what tells them apart.
+  DateTime? _externalPauseAt;
+
   AuvyAudioHandler(this._playerNotifier) {
     // Push player state changes to the lock screen and notification.
     _playerNotifier.addListener((state) {
@@ -79,6 +119,15 @@ class AuvyAudioHandler extends BaseAudioHandler with QueueHandler {
        if (state.isPlaying != _wasPlaying) {
          _wasPlaying = state.isPlaying;
          if (state.isPlaying) _playedInThisProcess = true;
+         if (!state.isPlaying) {
+           // A pause from inside the app stamps lastDeliberatePauseAt a moment
+           // before isPlaying turns false; anything else is a pause the
+           // listener didn't make here.
+           final now = DateTime.now();
+           bool recent(DateTime? t) => t != null && now.difference(t) < const Duration(seconds: 2);
+           final byTap = !recent(_externalPauseAt) && recent(_playerNotifier.lastDeliberatePauseAt);
+           _autoPausedAt = byTap ? null : now;
+         }
          markUserPlayback();
          // The idle shutdown timer follows the player state rather than which control
          // was used. In-app play/pause bypasses this handler, so arming and cancelling
@@ -96,6 +145,241 @@ class AuvyAudioHandler extends BaseAudioHandler with QueueHandler {
     // broadcastState.
     WidgetService.configure();
     WidgetService.onToggleLike = _toggleLikeFromSystem;
+    // Siri, Shortcuts, widgets, Control Center, the Quick Settings tile and the
+    // icon's shortcuts. See AppCommands.
+    AppCommands.attachPlayback(_runCommand);
+    // Your other phones' controls (the output sheet's "Your other devices").
+    // Only the commands DevicePresenceService lets through reach here; a
+    // take-over never comes from AppCommands.
+    DevicePresenceService.instance.onCommand = (name, args) async {
+      if (name == 'takeOver') {
+        final h = args['handoff'];
+        if (h is Map) await _playerNotifier.takeOverHandoff(Map<String, dynamic>.from(h));
+        return;
+      }
+      await _runCommand(name, args);
+    };
+    _publishPlaylists();
+    try {
+      _playerNotifier.ref.listen(
+        libraryProvider.select((l) => l.playlistSongs.keys.join('\n')),
+        (_, __) => _publishPlaylists(),
+      );
+      // A new accent repaints the widgets' play button straight away.
+      _playerNotifier.ref.listen(themeProvider, (_, __) {
+        _lastBroadcastSig = null;
+        broadcastState();
+      });
+    } catch (_) {
+      // No live library to follow (a test container); the startup list stands.
+    }
+  }
+
+  /// Where the song is playing from, for the widgets' small label: the
+  /// playlist or album, or what the autoplay picked it for ("Based on …").
+  String _widgetContext(PlayerState state) {
+    final title = (state.contextTitle ?? '').trim();
+    if (title.isNotEmpty) return title;
+    return (state.locationName ?? '').trim();
+  }
+
+  /// The accent the widgets draw their play button in: the user's chosen
+  /// colour, as an ARGB int.
+  int? _widgetAccent() {
+    try {
+      return _playerNotifier.ref.read(themeProvider).toARGB32();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // --- Commands from outside the app's screens (AppCommands) ---
+
+  String? _lastPublishedPlaylists;
+
+  /// Sends the playlist names to native when they change, for Siri's playlist
+  /// picker and Android's pinned shortcuts.
+  void _publishPlaylists() {
+    final names = _playlistNames();
+    final sig = names.join('\n');
+    if (sig == _lastPublishedPlaylists) return;
+    _lastPublishedPlaylists = sig;
+    AppCommands.publishPlaylists(names);
+  }
+
+  /// Runs a playback command and returns what Siri should say (null: nothing,
+  /// the system's now-playing speaks for itself).
+  Future<String?> _runCommand(String name, Map<String, dynamic> args) async {
+    final source = switch ((args['from'] ?? '').toString()) {
+      'siri' => 'Siri',
+      'widget' => 'Widget',
+      'control' => 'Control Center',
+      'tile' => 'Quick Settings',
+      'voice' => 'Voice search',
+      'connect' => 'Another device',
+      _ => 'Shortcut',
+    };
+    final current = _playerNotifier.currentState.currentSong;
+    switch (name) {
+      case 'togglePlay':
+        if (_playerNotifier.currentState.isPlaying) {
+          _pauseFrom = source;
+          await pause();
+          return 'Paused';
+        }
+        return _resumeOnRequest();
+      case 'play':
+        if (_playerNotifier.currentState.isPlaying) return null;
+        return _resumeOnRequest();
+      case 'pause':
+        if (!_playerNotifier.currentState.isPlaying) return null;
+        _pauseFrom = source;
+        await pause();
+        return 'Paused';
+      case 'next':
+        if (current == null) return 'Nothing is playing';
+        await skipToNext();
+        return null;
+      case 'previous':
+        if (current == null) return 'Nothing is playing';
+        await skipToPrevious();
+        return null;
+      case 'toggleLike':
+        if (current == null) return 'Nothing is playing';
+        _toggleLikeFromSystem();
+        return _isSongLiked(current.id)
+            ? 'Added ${current.title} to Liked Songs'
+            : 'Removed ${current.title} from Liked Songs';
+      case 'playCollection':
+        return _playCollection((args['id'] ?? '').toString(),
+            shuffle: args['shuffle'] == true, source: source);
+      case 'playPlaylist':
+        final wanted = (args['name'] ?? '').toString();
+        // The library's own lists by their shown names (a pinned shortcut for
+        // "Downloads" carries that name, not the folder key).
+        final builtIn = switch (wanted.trim().toLowerCase()) {
+          'downloads' => 'downloads',
+          'weekly discovery' => 'weekly',
+          'my top 50' => 'top50',
+          _ => null,
+        };
+        if (builtIn != null) {
+          return _playCollection(builtIn, shuffle: args['shuffle'] == true, source: source);
+        }
+        final key = _findPlaylistKey(wanted);
+        if (key == null) return "Couldn't find a playlist called $wanted";
+        if (key == _folderLiked) {
+          return _playCollection('liked', shuffle: args['shuffle'] == true, source: source);
+        }
+        return _playList(key, _songsForFolder(key), shuffle: args['shuffle'] == true, source: source);
+      case 'searchPlay':
+        final query = (args['query'] ?? '').toString().trim();
+        if (query.isEmpty) return 'What should I play?';
+        return await _playFromQuery(query, source: source) ?? "Couldn't find $query";
+      case 'openLink':
+        return _openLinkInBackground((args['url'] ?? '').toString());
+    }
+    return null;
+  }
+
+  /// Resumes because the listener asked (Siri, a widget, a tile): no
+  /// stray-press guard, since none of these can be pressed by accident from
+  /// another device. With nothing loaded, picks up the last song played.
+  Future<String?> _resumeOnRequest() async {
+    _cancelIdleKillTimer();
+    _stopped = false;
+    final state = _playerNotifier.currentState;
+    if (state.currentSong == null) {
+      await playFromMediaId(_resumeMediaId);
+      final now = _playerNotifier.currentState.currentSong;
+      return now == null ? 'Nothing to resume yet' : 'Playing ${now.title}';
+    }
+    if (!state.isPlaying) _playerNotifier.togglePlay(haptic: false);
+    broadcastState();
+    return null;
+  }
+
+  Future<String> _playCollection(String id, {required bool shuffle, required String source}) async {
+    switch (id) {
+      case 'liked':
+        return _playList('Liked Songs', _songsForFolder(_folderLiked), shuffle: shuffle, source: source);
+      case 'weekly':
+        return _playList(kWeeklyDiscoveryTitle, _songsForFolder(kWeeklyDiscoveryTitle),
+            shuffle: shuffle, source: source);
+      case 'top50':
+        return _playList('My Top 50', _songsForFolder(_folderTop50), shuffle: shuffle, source: source);
+      case 'downloads':
+        // The library's own name as the context, so "playing from" matches
+        // the Downloads row.
+        return _playList('Downloads', _songsForFolder(_folderDownloads),
+            shuffle: shuffle, source: source);
+      case 'recent':
+        return _playList('Recently played', _songsForFolder(_folderRecent),
+            shuffle: shuffle, source: source, contextKey: 'Recently played');
+      case 'library':
+        // Everything saved, once each, always shuffled: in order it would just be
+        // Liked Songs followed by the first playlist.
+        final seen = <String>{};
+        final all = <Song>[
+          for (final s in _songsForFolder(_folderLiked)) if (seen.add(s.id)) s,
+          for (final name in _playlistNames())
+            for (final s in _songsForFolder(name)) if (seen.add(s.id)) s,
+        ];
+        return _playList('your library', all, shuffle: true, source: source, contextKey: 'Library');
+    }
+    return "Auvy doesn't have that list";
+  }
+
+  /// Plays [songs] the way the playlist page does, so the queue context (and
+  /// what "playing from" says) is the same whichever way it was started.
+  Future<String> _playList(String label, List<Song> songs,
+      {required bool shuffle, required String source, String? contextKey}) async {
+    if (songs.isEmpty) {
+      return label == 'your library' ? 'Your library is empty' : '$label is empty';
+    }
+    final queue = List<Song>.from(songs);
+    if (shuffle) queue.shuffle();
+    _cancelIdleKillTimer();
+    _stopped = false;
+    final key = contextKey ?? label;
+    await _playerNotifier.playSong(queue.first,
+        newQueue: queue,
+        index: 0,
+        source: source,
+        locationName: label,
+        contextId: key,
+        contextType: 'playlist',
+        contextTitle: label);
+    return shuffle ? 'Shuffling $label' : 'Playing $label';
+  }
+
+  /// The library key for a playlist the listener named: exact (ignoring case)
+  /// first, then the closest one containing it.
+  String? _findPlaylistKey(String wanted) {
+    final w = wanted.trim().toLowerCase();
+    if (w.isEmpty) return null;
+    if (w == 'liked songs' || w == 'liked' || w == 'my likes') return _folderLiked;
+    final names = [..._playlistNames(), kWeeklyDiscoveryTitle, 'My Top 50'];
+    for (final n in names) {
+      if (n.toLowerCase() == w) return n;
+    }
+    final partial = names.where((n) => n.toLowerCase().contains(w) || w.contains(n.toLowerCase())).toList()
+      ..sort((a, b) => a.length.compareTo(b.length));
+    return partial.isEmpty ? null : partial.first;
+  }
+
+  Future<String> _openLinkInBackground(String text) async {
+    final link = MusicLink.find(text);
+    if (link == null) return "That isn't a Spotify, Apple Music or YouTube link";
+    try {
+      final library = _playerNotifier.ref.read(libraryProvider.notifier);
+      final resolver = MusicLinkResolver(library);
+      final resolved = await resolver.resolve(link);
+      final played = await MusicLinkPlayer(resolver, _playerNotifier, library).play(resolved);
+      return played ? 'Playing ${resolved.title}' : "Couldn't find those songs on YouTube Music";
+    } on MusicLinkException catch (e) {
+      return e.message;
+    }
   }
 
   /// Toggles the current track's like from the notification or widget heart, then
@@ -144,9 +428,11 @@ class AuvyAudioHandler extends BaseAudioHandler with QueueHandler {
       final last = _lastMediaClickAt;
       _lastMediaClickAt = now;
       if (last != null && now.difference(last) < const Duration(milliseconds: 1000)) {
+        print('media controls: repeated ${button.name} click within 1 s ignored');
         return; // swallow the spurious repeated click
       }
     }
+    print('media controls: ${button.name} button click (headset or accessory)');
     return super.click(button);
   }
 
@@ -220,6 +506,45 @@ class AuvyAudioHandler extends BaseAudioHandler with QueueHandler {
     return false;
   }
 
+  /// How soon after a pause nobody made in the app a headset PLAY is taken for
+  /// the earbud's own doing. Galaxy Buds sent theirs 2.7 to 5.9 s after the
+  /// pause on the owner's phones (iPhone and Android).
+  static const Duration kEarbudBounceWindow = Duration(seconds: 7);
+
+  /// Whether a headset PLAY now is an earbud sensor rather than a press: the
+  /// setting is on, headphones are the output, and playback stopped less than
+  /// [kEarbudBounceWindow] ago for a reason other than the listener pausing in
+  /// the app. A deliberate re-tap that soon is caught too; the setting turns it off.
+  static bool isEarbudBounce({
+    required bool enabled,
+    required DateTime? autoPausedAt,
+    required DateTime now,
+    required String? route,
+  }) {
+    if (!enabled || autoPausedAt == null) return false;
+    if (route != 'bluetooth' && route != 'headphones' && route != 'usb') return false;
+    final since = now.difference(autoPausedAt);
+    return !since.isNegative && since < kEarbudBounceWindow;
+  }
+
+  Future<bool> _isEarbudBounceNow() async {
+    final pausedAt = _autoPausedAt;
+    if (pausedAt == null || !ListeningPolicy.ignoreEarbudBounce) return false;
+    final route = await AudioOutputService.currentRoute();
+    final now = DateTime.now();
+    if (!isEarbudBounce(
+        enabled: ListeningPolicy.ignoreEarbudBounce, autoPausedAt: pausedAt, now: now, route: route)) {
+      return false;
+    }
+    print('STOP: Ignoring headset PLAY ${now.difference(pausedAt).inMilliseconds} ms after a pause '
+        "nobody made in the app (an earbud going into its case or back in, not a press). "
+        'Settings → Playback → "Ignore earbud play after a pause" turns this off.');
+    // Said once: a second press after this one is honoured.
+    _autoPausedAt = null;
+    broadcastState();
+    return true;
+  }
+
   /// How long after the user's last playback an external PLAY is still honoured:
   /// long enough to pause, walk away and resume from the headset; short enough that
   /// a stray key later in the day cannot start the app.
@@ -281,6 +606,12 @@ class AuvyAudioHandler extends BaseAudioHandler with QueueHandler {
   @override
   Future<void> play() async {
     if (await _shouldIgnoreExternalPlay()) return;
+    if (await _isEarbudBounceNow()) return;
+    // Logged like pause() below: without it, music an earbud started looked the
+    // same in the activity log as music that started by itself.
+    if (!_playerNotifier.currentState.isPlaying) {
+      print('media controls: play (headset, notification, lock screen or watch)');
+    }
     _cancelIdleKillTimer();
     _stopped = false;
     // Only resume when actually paused. togglePlay() flips the state, so calling it
@@ -291,12 +622,19 @@ class AuvyAudioHandler extends BaseAudioHandler with QueueHandler {
     broadcastState();
   }
 
+  /// Who is pausing, for the log line in [pause]: set by [_runCommand] for Siri
+  /// and the widgets, which reach [pause] the same way a headset does.
+  String _pauseFrom = 'headset, notification, lock screen or watch';
+
   @override
   Future<void> pause() async {
+    _externalPauseAt = DateTime.now();
+    final from = _pauseFrom;
+    _pauseFrom = 'headset, notification, lock screen or watch';
     if (_playerNotifier.currentState.isPlaying) {
       // Only external controls reach here, so this line tells a pause the listener
       // asked for from one that "happened by itself".
-      print('media controls: pause (headset, notification, lock screen or watch)');
+      print('media controls: pause ($from)');
       _playerNotifier.togglePlay();
     }
     _scheduleIdleKillTimer();
@@ -490,8 +828,12 @@ class AuvyAudioHandler extends BaseAudioHandler with QueueHandler {
           return lib.likedSongs;
         case _folderTop50:
           return lib.playlistSongs['My Top 50'] ?? const [];
+        // The library's folder is 'Downloads'; 'Downloaded' is only this
+        // folder's id in the browse tree. Looked up under the id, the car's
+        // Downloads and "play my downloads" were always empty (fixed
+        // 2026-10-17).
         case _folderDownloads:
-          return lib.playlistSongs['Downloaded'] ?? const [];
+          return lib.playlistSongs['Downloads'] ?? const [];
         case _folderCached:
           return lib.playlistSongs['Cached'] ?? const [];
         case _folderRecent:
@@ -613,7 +955,8 @@ class AuvyAudioHandler extends BaseAudioHandler with QueueHandler {
     );
   }
 
-  /// Voice search: "Hey Google, play … on Auvy".
+  /// Android's voice search ("play … on Auvy"), from whichever assistant or car
+  /// system supports the media session's play-from-search.
   ///
   /// Looks in the library first (what people ask for in the car is usually already
   /// saved, and a local match plays instantly or with no signal), then searches
@@ -622,8 +965,34 @@ class AuvyAudioHandler extends BaseAudioHandler with QueueHandler {
   @override
   Future<void> playFromSearch(String query,
       [Map<String, dynamic>? extras]) async {
+    await _playFromQuery(query, source: 'Voice search');
+  }
+
+  /// Plays what [query] asks for and says what that was, or null when nothing
+  /// matched. A list first ("liked songs", "weekly discovery", a playlist's
+  /// name), then the library, then the catalogue. Shared by Android's voice
+  /// search and Siri's "Search Auvy".
+  Future<String?> _playFromQuery(String query, {required String source}) async {
+    final lower = query.toLowerCase().trim();
+    final asked = lower.replaceFirst(RegExp(r'^(my |the )'), '').replaceFirst(RegExp(r' playlist$'), '').trim();
+    if (asked == 'liked songs' || asked == 'likes' || asked == 'liked' || asked == 'favourites' ||
+        asked == 'favorites') {
+      return _playCollection('liked', shuffle: false, source: source);
+    }
+    if (asked == 'weekly discovery' || asked == 'discovery') {
+      return _playCollection('weekly', shuffle: false, source: source);
+    }
+    if (asked == 'top 50' || asked == 'top fifty') {
+      return _playCollection('top50', shuffle: false, source: source);
+    }
+    for (final name in _playlistNames()) {
+      if (name.toLowerCase() == asked) {
+        return _playList(name, _songsForFolder(name), shuffle: false, source: source);
+      }
+    }
+
     final q = normalizedTrackTitle(query);
-    if (q.isEmpty) return;
+    if (q.isEmpty) return null;
 
     final candidates = <Song>[];
     try {
@@ -665,22 +1034,25 @@ class AuvyAudioHandler extends BaseAudioHandler with QueueHandler {
       await _playerNotifier.playSong(best,
           newQueue: queue.isEmpty ? [best] : queue,
           index: index < 0 ? 0 : index,
-          source: 'Voice search');
-      return;
+          source: source);
+      return bestScore < 0.9 ? 'Playing ${best.artist}' : 'Playing ${best.title}';
     }
 
     // Nothing in the library: search the catalogue. A failure here means the
     // assistant reports it found nothing.
     try {
       final results = await SearchService().search(query, 'song');
-      if (results.isEmpty) return;
+      if (results.isEmpty) return null;
       _cancelIdleKillTimer();
       _stopped = false;
       await _playerNotifier.playSong(results.first,
           newQueue: results.take(25).toList(),
           index: 0,
-          source: 'Voice search');
-    } catch (_) {}
+          source: source);
+      return 'Playing ${results.first.title} by ${results.first.artist}';
+    } catch (_) {
+      return null;
+    }
   }
 
   /// 1.0 exact title · 0.9 title contains the query · 0.5 artist match.
@@ -754,21 +1126,54 @@ class AuvyAudioHandler extends BaseAudioHandler with QueueHandler {
     final isPlaying = state.isPlaying;
     final isLiked = _isSongLiked(state.currentSong?.id);
 
-    // Nothing the system cares about changed: skip the platform call.
+    // Nothing the system cares about changed: skip the platform call. The position
+    // isn't in the signature: the system moves the progress on by itself, so only a
+    // jump (a seek) is news.
     final sig = '$isPlaying|$isLiked|${state.isLoading}|${state.repeatMode}|'
-        '${state.isShuffle}|${state.speed}|${state.position.inSeconds}|'
+        '${state.isShuffle}|${state.speed}|'
         '${state.duration.inSeconds}|${state.currentSong?.id}';
-    if (sig == _lastBroadcastSig) return;
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final posMs = state.position.inMilliseconds;
+    final jumped = positionJumped(
+        lastPosMs: _lastBroadcastPosMs, lastAtMs: _lastBroadcastAtMs, moving: _lastBroadcastMoving,
+        speed: state.speed, posMs: posMs, nowMs: nowMs);
+    if (sig == _lastBroadcastSig && !jumped) return;
     _lastBroadcastSig = sig;
+    _lastBroadcastPosMs = posMs;
+    _lastBroadcastAtMs = nowMs;
+    _lastBroadcastMoving = isPlaying && !state.isLoading;
 
     // Mirror into the home-screen widget (it has its own dedupe).
     WidgetService.push(
       title: state.currentSong?.title ?? '',
       artist: state.currentSong?.displayArtist ?? '',
-      imageUrl: state.currentSong?.image ?? '',
+      // The widgets draw the cover at 200-300 px and fetch it themselves,
+      // outside the image cache: the full-size original was ~250 KB per song,
+      // whether or not a widget was on the home screen.
+      imageUrl: AuvyImage.sizedUrl(state.currentSong?.image ?? '', 360),
       isPlaying: isPlaying,
       isLiked: isLiked,
       hasSong: state.currentSong != null,
+      accent: _widgetAccent(),
+      context: _widgetContext(state),
+      positionMs: state.position.inMilliseconds,
+      durationMs: state.duration.inMilliseconds,
+      upNext: [
+        for (final s in state.queue.skip(1).take(3))
+          s.displayArtist.isEmpty ? s.title : '${s.title} — ${s.displayArtist}',
+      ],
+    );
+
+    // Your other phones' output sheets (it has its own dedupe and throttle).
+    DevicePresenceService.instance.publish(
+      hasSong: state.currentSong != null,
+      playing: isPlaying,
+      songId: state.currentSong?.id ?? '',
+      title: state.currentSong?.title ?? '',
+      artist: state.currentSong?.displayArtist ?? '',
+      image: state.currentSong?.image ?? '',
+      positionMs: state.position.inMilliseconds,
+      durationMs: state.duration.inMilliseconds,
     );
 
     final isRadio = state.currentSong?.mediaKind == MediaKind.liveStream;

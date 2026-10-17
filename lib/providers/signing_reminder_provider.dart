@@ -3,10 +3,18 @@
 /// On iPhone Auvy is installed with SideStore, which signs it with the
 /// listener's Apple ID; on a free one the signature lasts 7 days. SideStore
 /// renews it in the background, but only while it can run with LocalDevVPN on,
-/// and when a renewal is missed Auvy simply stops opening. The expiry is read
-/// from the app's own provisioning profile at launch and on resume (a refresh
-/// writes a new one), and local notifications are scheduled 2 days, 1 day and
-/// 3 hours before it. A card on Home says the same once 2 days remain.
+/// and when a renewal is missed Auvy simply stops opening. Local notifications
+/// are scheduled 2 days, 1 day and 3 hours before the expiry, and a card on
+/// Home says the same once 2 days remain.
+///
+/// Where the expiry comes from: the provisioning profile inside the app at
+/// install. A SideStore refresh does NOT update that file; it only installs a
+/// new profile into iOS (its RefreshAppOperation), and no iOS API shows an app
+/// the profile actually in use. So after a refresh Auvy has to be told: "I've
+/// refreshed" on the card, in Settings or on the reminder itself records it,
+/// and the expiry becomes that moment plus the profile's length (7 days on a
+/// free Apple ID). Seen on device: a refresh worked and the reminders kept
+/// counting down to the old date.
 ///
 /// Nothing leaves the phone. The setting is per device and not backed up, since
 /// each phone has its own signature.
@@ -47,6 +55,37 @@ SigningStage signingStage(DateTime expiresAt, DateTime now) {
 
 const _howTo = 'Turn on LocalDevVPN, open SideStore and tap Refresh All';
 
+/// A free Apple ID's signature lasts this long; used when the profile doesn't
+/// say when it was made.
+const kDefaultSigningLength = Duration(days: 7);
+
+/// What Auvy can tell about the signature from what it can see: the profile
+/// inside the app ([profileExpires], [profileCreated]) and the last refresh the
+/// listener confirmed ([refreshedAt]).
+///
+/// A confirmed refresh counts only if it came after that profile was made (a
+/// fresh install carries its own, newer date). Still running past the date it
+/// knows means SideStore renewed Auvy without saying when: the real expiry is
+/// unknown, so [renewedUnseen] is set and no countdown is shown.
+({DateTime? expiresAt, Duration length, bool renewedUnseen}) effectiveSigningExpiry({
+  required DateTime profileExpires,
+  DateTime? profileCreated,
+  DateTime? refreshedAt,
+  required DateTime now,
+}) {
+  final measured = profileCreated == null ? null : profileExpires.difference(profileCreated);
+  final length = (measured != null && measured > Duration.zero) ? measured : kDefaultSigningLength;
+  var expires = profileExpires;
+  if (refreshedAt != null && (profileCreated == null || refreshedAt.isAfter(profileCreated))) {
+    final fromRefresh = refreshedAt.add(length);
+    if (fromRefresh.isAfter(expires)) expires = fromRefresh;
+  }
+  if (!expires.isAfter(now)) {
+    return (expiresAt: null, length: length, renewedUnseen: true);
+  }
+  return (expiresAt: expires, length: length, renewedUnseen: false);
+}
+
 /// The reminders still ahead for [expiresAt]: 2 days, 1 day and 3 hours before.
 /// Past ones are left out; the Home card covers the time already inside them.
 List<SigningReminder> planSigningReminders(DateTime expiresAt, DateTime now) => [
@@ -71,9 +110,19 @@ String formatSigningLeft(Duration left) {
 }
 
 class SigningReminderState {
-  /// When this install stops opening. Null when there is no provisioning
-  /// profile (App Store or TestFlight build, simulator) or before the first read.
+  /// When this install stops opening, as far as Auvy can tell (see
+  /// [effectiveSigningExpiry]). Null when there is no provisioning profile (App
+  /// Store or TestFlight build, simulator), before the first read, or when
+  /// SideStore renewed it without Auvy being told ([renewedUnseen]).
   final DateTime? expiresAt;
+
+  /// Sideloaded, and still running past every date Auvy knows: SideStore
+  /// renewed it, the new date is unknown, and reminders wait for "I've
+  /// refreshed".
+  final bool renewedUnseen;
+
+  /// The last refresh the listener confirmed.
+  final DateTime? refreshedAt;
 
   /// Null until the listener chooses; the Home card asks once.
   final bool? enabled;
@@ -86,6 +135,8 @@ class SigningReminderState {
 
   const SigningReminderState({
     this.expiresAt,
+    this.renewedUnseen = false,
+    this.refreshedAt,
     this.enabled,
     this.permission = 'undecided',
     this.dismissed = '',
@@ -99,6 +150,8 @@ class SigningReminderState {
   }) =>
       SigningReminderState(
         expiresAt: expiresAt ?? this.expiresAt,
+        renewedUnseen: renewedUnseen,
+        refreshedAt: refreshedAt,
         enabled: enabled ?? this.enabled,
         permission: permission ?? this.permission,
         dismissed: dismissed ?? this.dismissed,
@@ -106,6 +159,9 @@ class SigningReminderState {
 
   String dismissKey(SigningStage stage) =>
       '${expiresAt?.millisecondsSinceEpoch}:${stage.name}';
+
+  /// Dismissing the "renewed, date unknown" card, until the next refresh.
+  String get renewedDismissKey => 'renewed:${refreshedAt?.millisecondsSinceEpoch}';
 }
 
 class SigningReminderNotifier extends StateNotifier<SigningReminderState> {
@@ -119,6 +175,9 @@ class SigningReminderNotifier extends StateNotifier<SigningReminderState> {
   /// What the last schedule was for. Resumes are frequent, and the reminders
   /// only need replacing when the expiry or the choice changes.
   String? _scheduledFor;
+
+  /// The profile's length, for the notification button's reschedule.
+  Duration _length = kDefaultSigningLength;
 
   /// Re-reads the expiry and permission and reschedules if anything changed.
   /// Called at launch and on every resume; iOS only.
@@ -140,12 +199,28 @@ class SigningReminderNotifier extends StateNotifier<SigningReminderState> {
       }
       final expiry = await _channel.invokeMapMethod<String, dynamic>('expiry');
       final permission = await _channel.invokeMethod<String>('permission') ?? 'undecided';
-      final expiresMs = (expiry?['expiresMs'] as num?)?.toInt();
-      final expiresAt =
-          expiresMs == null ? null : DateTime.fromMillisecondsSinceEpoch(expiresMs);
+      DateTime? at(String key) {
+        final ms = (expiry?[key] as num?)?.toInt();
+        return ms == null ? null : DateTime.fromMillisecondsSinceEpoch(ms);
+      }
+      final profileExpires = at('expiresMs');
+      final refreshedAt = at('refreshedMs');
+      final e = profileExpires == null
+          ? null
+          : effectiveSigningExpiry(
+              profileExpires: profileExpires,
+              profileCreated: at('createdMs'),
+              refreshedAt: refreshedAt,
+              now: DateTime.now());
+      if (e != null) _length = e.length;
       if (!mounted) return;
       state = SigningReminderState(
-          expiresAt: expiresAt, enabled: enabled, permission: permission, dismissed: dismissed);
+          expiresAt: e?.expiresAt,
+          renewedUnseen: e?.renewedUnseen ?? false,
+          refreshedAt: refreshedAt,
+          enabled: enabled,
+          permission: permission,
+          dismissed: dismissed);
       await _schedule();
     } catch (e) {
       print('WARN: signing: could not read the signature ($e)');
@@ -156,9 +231,16 @@ class SigningReminderNotifier extends StateNotifier<SigningReminderState> {
     final s = state;
     final expiresAt = s.expiresAt;
     final on = s.enabled == true && s.permission == 'granted';
-    final key = '${expiresAt?.millisecondsSinceEpoch}|$on';
+    final key = '${expiresAt?.millisecondsSinceEpoch}|$on|${s.renewedUnseen}';
     if (key == _scheduledFor) return;
     _scheduledFor = key;
+    if (s.renewedUnseen) {
+      // The old reminders count down to a date that no longer holds.
+      await _channel.invokeMethod('cancel');
+      print('signing: running past the date Auvy knows, so SideStore renewed it; '
+          'reminders wait for "I\'ve refreshed"');
+      return;
+    }
     if (expiresAt == null) {
       print('signing: no provisioning profile, so no expiry to remind about');
       return;
@@ -171,8 +253,11 @@ class SigningReminderNotifier extends StateNotifier<SigningReminderState> {
       return;
     }
     final plan = planSigningReminders(expiresAt, DateTime.now());
-    final added = await _channel.invokeMethod<int>(
-        'schedule', {'reminders': [for (final r in plan) r.toChannel()]});
+    final added = await _channel.invokeMethod<int>('schedule', {
+      'reminders': [for (final r in plan) r.toChannel()],
+      'expiresMs': expiresAt.millisecondsSinceEpoch,
+      'lengthMs': _length.inMilliseconds,
+    });
     print('signing: runs out ${_stamp(expiresAt)} ($left left); '
         '${added ?? 0} reminder${added == 1 ? '' : 's'} scheduled'
         '${plan.isEmpty ? '' : ' (${plan.map((r) => r.id).join(', ')} before)'}');
@@ -231,6 +316,29 @@ class SigningReminderNotifier extends StateNotifier<SigningReminderState> {
   void dismiss(SigningStage stage) {
     state = state.copyWith(dismissed: state.dismissKey(stage));
     unawaited(_save());
+  }
+
+  void dismissRenewed() {
+    state = state.copyWith(dismissed: state.renewedDismissKey);
+    unawaited(_save());
+  }
+
+  /// "I've refreshed": SideStore just renewed Auvy, so the expiry is now plus
+  /// the profile's length. Recorded on the native side too, which is where the
+  /// reminder's own "I've refreshed" button writes it.
+  Future<void> markRefreshed() async {
+    if (!Platform.isIOS) return;
+    try {
+      await _channel.invokeMethod('markRefreshed');
+    } catch (e) {
+      print('WARN: signing: could not record the refresh ($e)');
+      return;
+    }
+    _scheduledFor = null;
+    await _refresh();
+    final at = state.expiresAt;
+    print('signing: refresh confirmed'
+        '${at == null ? '' : '; runs out ${_stamp(at)}'}');
   }
 
   Future<void> openSettings() async {

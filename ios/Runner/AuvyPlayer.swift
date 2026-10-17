@@ -10,8 +10,9 @@ import MediaPlayer
 /// `NativePlayerManager.kt` and answers the same method names with the same
 /// argument shapes, so `native_audio_engine.dart` works unchanged.
 ///
-/// Where AVPlayer can't do what ExoPlayer does (`setEqualizer`, `setPitch`,
-/// `setSkipSilence`), the method says so to Dart rather than pretending.
+/// Where AVPlayer can't do what ExoPlayer does (`setPitch`, `setSkipSilence`),
+/// the method says so to Dart rather than pretending. The equaliser and the
+/// loudness trim run in an audio tap (AuvyAudioTap).
 final class AuvyPlayer: NSObject {
 
     static let channelName = "com.auvy.app/native_player"
@@ -26,6 +27,11 @@ final class AuvyPlayer: NSObject {
 
     /// The videoId of the item now playing, so callbacks can name it.
     private var currentVideoId: String = ""
+    /// The videoId of the item actually in the player. `currentVideoId` changes
+    /// when a load starts, but the previous song stays in the player (and keeps
+    /// ticking) until the new file is ready; position ticks name this one, so
+    /// Dart can tell the previous song's ticks apart.
+    private var itemVideoId: String = ""
     /// The item armed by `setUpcoming`, and the id it represents.
     private var upcomingItem: AVPlayerItem?
     private var upcomingVideoId: String = ""
@@ -60,6 +66,16 @@ final class AuvyPlayer: NSObject {
     /// The user's play/pause INTENT, which survives an error — unlike `isPlaying`,
     /// which has already gone false by the time a buffer underrun surfaces.
     private var playWhenReady = false
+
+    /// A track is being fetched and its item isn't in the player yet: the player
+    /// still holds the PREVIOUS song. A seek or play asked for now is meant for
+    /// the new track, so the seek is held here and applied once the new item is
+    /// ready, and a play only records the intent. Seen on the phone (2026-10-16):
+    /// a song handed over at 25 s started at 0:00, because the seek went to the
+    /// old song, and Dart's play restarted the old song for a second meanwhile.
+    private var awaitingItem = false
+    private var heldStartMs: Int64 = 0
+    private var startSeekObservation: NSKeyValueObservation?
     /// Stalls since Dart last asked, read-and-cleared: the question is "has
     /// anything gone wrong since I last decided?", so a running total would keep
     /// re-triggering the same downgrade.
@@ -189,22 +205,42 @@ final class AuvyPlayer: NSObject {
         case "pause":
             pause(); result(nil)
 
+        case "setMetering":
+            // The player cover's glow follows the music only while it's on screen.
+            AuvyAudioTap.shared.setMetering((args["on"] as? Bool) ?? false, item: player.currentItem)
+            result(nil)
+
+        case "getLevel":
+            result(Double(player.timeControlStatus == .playing ? AuvyAudioTap.shared.level : 0))
+
         case "resume":
             resume(); result(nil)
 
         case "stop":
             playWhenReady = false
+            AuvyAudioTap.shared.resetLevel()
+            awaitingItem = false
+            heldStartMs = 0
+            startSeekObservation = nil
             // Invalidate any in-flight fetch: otherwise a fetch that finishes after
             // Dart said stop would still pass the generation check and start playing.
             playGeneration += 1
             player.pause()
             player.removeAllItems()
             currentVideoId = ""
+            itemVideoId = ""
             send("onBuffering", ["buffering": false])
             result(nil)
 
         case "seek":
             let ms = (args["positionMs"] as? NSNumber)?.int64Value ?? 0
+            if awaitingItem {
+                // For the track still being fetched (see awaitingItem).
+                heldStartMs = ms
+                AuvyPlayer.log("seek \(ms)ms held until the track is ready")
+                result(nil)
+                return
+            }
             lastSeekUptime = ProcessInfo.processInfo.systemUptime
             player.seek(to: CMTime(value: ms, timescale: 1000),
                         toleranceBefore: .zero, toleranceAfter: .zero)
@@ -300,7 +336,23 @@ final class AuvyPlayer: NSObject {
         case "getNetworkStats":
             result(networkStats())
 
-        case "setEqualizer", "setPitch", "setSkipSilence", "setNormalizationGain":
+        case "setEqualizer":
+            // Applied through an audio tap on each item (see AuvyAudioTap), so the
+            // track already playing picks it up too.
+            AuvyAudioTap.shared.setEqualizer(
+                enabled: args["enabled"] as? Bool ?? false,
+                bands: (args["bands"] as? [NSNumber])?.map { $0.doubleValue } ?? [])
+            AuvyAudioTap.shared.attachIfNeeded(to: player.currentItem)
+            result(nil)
+
+        case "setNormalizationGain":
+            AuvyAudioTap.shared.setNormalization(
+                enabled: args["enabled"] as? Bool ?? false,
+                gainMb: (args["gainMb"] as? NSNumber)?.intValue ?? 0)
+            AuvyAudioTap.shared.attachIfNeeded(to: player.currentItem)
+            result(nil)
+
+        case "setPitch", "setSkipSilence":
             result(unsupportedDSP(call.method))
 
         // Output routing. iOS does not let an app choose its output device — the
@@ -375,6 +427,9 @@ final class AuvyPlayer: NSObject {
         let generation = playGeneration
         currentVideoId = videoId
         clearUpcoming()
+        awaitingItem = false
+        heldStartMs = 0
+        startSeekObservation = nil
 
         // A downloaded file, or a podcast/radio stream with no length to fetch by.
         //
@@ -426,13 +481,17 @@ final class AuvyPlayer: NSObject {
             start(AVPlayerItem(url: file), autoPlay: autoPlay)
             return
         }
+        // From here the item arrives later: until then the player still holds the
+        // previous song (see awaitingItem), and the play intent may change, so
+        // the item starts with playWhenReady as it is by then.
+        awaitingItem = true
         if videoId == prefetchingVideoId {
             send("onBuffering", ["buffering": true])
             prefetchWaiters.append { [weak self] url in
                 guard let self = self, self.playGeneration == generation else { return }
                 if let url = url {
                     self.send("onBuffering", ["buffering": false])
-                    self.start(AVPlayerItem(url: url), autoPlay: autoPlay)
+                    self.start(AVPlayerItem(url: url), autoPlay: self.playWhenReady)
                 } else {
                     self.fetchThenPlay(videoId: videoId, source: source,
                                        generation: generation, autoPlay: autoPlay)
@@ -470,10 +529,11 @@ final class AuvyPlayer: NSObject {
                     guard let self = self, self.playGeneration == generation else { return }
                     self.send("onBuffering", ["buffering": false])
                     guard let fileURL = fileURL else {
-                        self.send("onPlayerError", ["playWhenReady": autoPlay])
+                        self.awaitingItem = false
+                        self.send("onPlayerError", ["playWhenReady": self.playWhenReady])
                         return
                     }
-                    self.start(AVPlayerItem(url: fileURL), autoPlay: autoPlay)
+                    self.start(AVPlayerItem(url: fileURL), autoPlay: self.playWhenReady)
                 }
             }
         }
@@ -503,8 +563,42 @@ final class AuvyPlayer: NSObject {
         item.audioTimePitchAlgorithm = .spectral
         player.removeAllItems()
         player.insert(item, after: nil)
+        itemVideoId = currentVideoId
         observeItem(item)
+        // The equaliser and loudness trim, when either is on.
+        AuvyAudioTap.shared.attachIfNeeded(to: item)
         playWhenReady = autoPlay
+        awaitingItem = false
+        let startAt = heldStartMs
+        heldStartMs = 0
+        if startAt > 0 {
+            // A position asked for while the file was fetched: applied once the item
+            // is ready (a seek before that can be dropped), and only then does it
+            // play, so the start of the song is never heard first.
+            startSeekObservation = item.observe(\.status, options: [.initial, .new]) { [weak self] i, _ in
+                guard i.status == .readyToPlay else { return }
+                DispatchQueue.main.async {
+                    guard let self = self, self.player.currentItem === i,
+                          self.startSeekObservation != nil else { return }
+                    self.startSeekObservation = nil
+                    self.lastSeekUptime = ProcessInfo.processInfo.systemUptime
+                    i.seek(to: CMTime(value: startAt, timescale: 1000),
+                           toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
+                        DispatchQueue.main.async {
+                            guard let self = self, self.player.currentItem === i else { return }
+                            AuvyPlayer.log("held seek \(startAt)ms applied (finished=\(finished))")
+                            if self.playWhenReady {
+                                self.activatePlaybackSession()
+                                self.lastPlayUptime = ProcessInfo.processInfo.systemUptime
+                                self.player.playImmediately(atRate: self.currentSpeed)
+                            }
+                            self.reassertState()
+                        }
+                    }
+                }
+            }
+            return
+        }
         if autoPlay {
             activatePlaybackSession()
             lastPlayUptime = ProcessInfo.processInfo.systemUptime
@@ -582,6 +676,7 @@ final class AuvyPlayer: NSObject {
     private func pause() {
         playWhenReady = false
         player.pause()
+        AuvyAudioTap.shared.resetLevel()
         reassertState()
     }
 
@@ -600,6 +695,12 @@ final class AuvyPlayer: NSObject {
 
     private func resume() {
         playWhenReady = true
+        if awaitingItem {
+            // Played once the new track is in (see start); playing now would
+            // restart the previous song.
+            reassertState()
+            return
+        }
         activatePlaybackSession()
         lastPlayUptime = ProcessInfo.processInfo.systemUptime
         player.playImmediately(atRate: currentSpeed)
@@ -703,6 +804,7 @@ final class AuvyPlayer: NSObject {
             "positionMs": Int(max(0, position.isFinite ? position : 0) * 1000),
             "durationMs": Int(max(0, duration.isFinite ? duration : 0) * 1000),
             "isPlaying": player.timeControlStatus == .playing,
+            "videoId": itemVideoId,
         ])
     }
 
@@ -758,9 +860,9 @@ final class AuvyPlayer: NSObject {
         AVAudioSession.sharedInstance().currentRoute.outputs.contains { $0.portType == .carAudio }
     }
 
-    /// AVPlayer exposes no equalizer, no independent pitch shift and no silence
-    /// trimmer. Honouring these would mean decoding through AVAudioEngine, which
-    /// cannot stream from a URL the way this player must. Reported, not silently
+    /// AVPlayer exposes no independent pitch shift and no silence trimmer.
+    /// Honouring these would mean decoding through AVAudioEngine, which cannot
+    /// stream from a URL the way this player must. Reported, not silently
     /// swallowed, so the setting can be hidden rather than appear to work.
     /// Methods already reported as unavailable, so each is noted once per launch
     /// (Dart sends the normalization gain with every track).

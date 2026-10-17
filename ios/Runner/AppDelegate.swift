@@ -17,7 +17,16 @@ import UIKit
     // What's New's check with Auvy closed. iOS needs the handler registered
     // before launch finishes, including a launch made only to run it.
     AuvyWhatsNewBackground.register()
+    // The icon's long-press menu: Liked Songs, Weekly Discovery, Top 50, Search.
+    AuvyCommands.installQuickActions()
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+  }
+
+  /// Swiped away (or otherwise closed by iOS while running): the music stops
+  /// with the app, so the widgets and Control Center must stop saying it plays.
+  override func applicationWillTerminate(_ application: UIApplication) {
+    AuvyNowPlayingStore.markStopped()
+    super.applicationWillTerminate(application)
   }
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
@@ -35,6 +44,10 @@ import UIKit
       // Haptics, toast, region, window, icon, backup, folder, output, and honest
       // answers for the Android-only ones. See AuvySystemChannels.
       systemChannels = AuvySystemChannels(messenger: messenger)
+      // Siri, Shortcuts, the widgets, Control Center, quick actions and auvy://
+      // links. A scene plugin too, so quick actions and links reach it.
+      AuvyCommands.shared.attach(messenger: messenger)
+      registrar.addSceneDelegate(AuvyCommands.shared)
     }
   }
 }
