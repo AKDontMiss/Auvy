@@ -1,6 +1,6 @@
 # Notices and attribution
 
-Auvy is licensed under the **GNU General Public License v3.0**. See [LICENSE](LICENSE).
+Auvy is licensed under the **GNU General Public License v3.0**. See [LICENSE](../LICENSE).
 
 ## Copyright
 
@@ -12,7 +12,7 @@ version 3 of the License, or (at your option) any later version.
 
 It is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
 without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
-PURPOSE. See [LICENSE](LICENSE) for the full terms.
+PURPOSE. See [LICENSE](../LICENSE) for the full terms.
 
 Portions are copyright their respective authors: see [Derived code](#derived-code)
 below, and the per-file headers those files carry.

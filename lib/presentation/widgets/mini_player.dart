@@ -588,7 +588,6 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer>
     final song = ref.watch(playerProvider.select((s) => s.currentSong));
     // Duration is watched live: it resolves about a second into each track.
     final duration = ref.watch(playerProvider.select((s) => s.duration));
-    final crossfadeEnabled = ref.watch(playerProvider.select((s) => s.crossfadeEnabled));
     final isLiveRadio = song?.id.startsWith('http') ?? false;
 
     if (isLiveRadio) return const SizedBox.shrink();
@@ -604,12 +603,6 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer>
               ? (pos.inMilliseconds / duration.inMilliseconds).clamp(0.0, 1.0)
               : 0.0;
 
-          // Crossfade transition indicator (last 5 seconds)
-          final bool isCrossfading = crossfadeEnabled &&
-              duration.inSeconds > 0 &&
-              (duration - pos).inSeconds <= 5 &&
-              (duration - pos).inSeconds > 0;
-
           return Container(
             height: 3,
             decoration: BoxDecoration(
@@ -624,11 +617,8 @@ class _MiniPlayerState extends ConsumerState<MiniPlayer>
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 300),
                     decoration: BoxDecoration(
-                      color: isCrossfading ? Colors.orangeAccent : color,
+                      color: color,
                       borderRadius: BorderRadius.circular(2),
-                      boxShadow: isCrossfading
-                          ? [const BoxShadow(color: Colors.orangeAccent, blurRadius: 6, spreadRadius: 1)]
-                          : null,
                     ),
                   ),
                 ),

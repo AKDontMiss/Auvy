@@ -3517,7 +3517,7 @@ class _LyricSyncBar extends ConsumerWidget {
         children: [
           step(Icons.remove_rounded, -tapMs, -longMs),
           // The shift is shown ONLY when it is not zero, and tapping it resets.
-          // The owner asked to keep seeing how far they had nudged, so it
+          // How far it has been nudged matters while it is nudged, so it
           // appears the moment it means something and costs nothing before
           // then — which is what stops this being a third permanent label.
           if (offset != Duration.zero) ...[
@@ -3950,8 +3950,8 @@ class _LivePulseDotState extends State<_LivePulseDot>
 /// As a repeating AnimationController each dot asked for a frame on every
 /// vsync for as long as the session or station lasted, ~120 a second, and on
 /// Android every frame redraws the whole player page (blurred lyric lines
-/// included): measured 2026-10-17, the Galaxy at 107-115% of a core and ~118
-/// frames a second as a Listen Together guest, the iPhone host at ~121. A
+/// included): measured 2026-10-17, 107-115% of a core and ~118 frames a
+/// second on Android as a Listen Together guest, ~121 on an iOS host. A
 /// dot this small looks the same at 12.5 steps a second. Shared, so two dots
 /// step together, and stopped while the app isn't in the foreground.
 class _PulseClock with WidgetsBindingObserver {

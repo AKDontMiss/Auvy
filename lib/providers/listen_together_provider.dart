@@ -246,7 +246,8 @@ class ListenTogetherNotifier extends StateNotifier<ListenTogetherState> {
 
   /// The presence tick. Each tick the host stamps the room (hostSeenMs) unless
   /// a push in the last tick already carried it; 25 s keeps a live host well
-  /// inside the 70 s takeover rule in firestore.rules even with one write lost.
+  /// inside the server rules' 70 s takeover (firestore.rules, not published)
+  /// even with one write lost.
   static const Duration _presenceEvery = Duration(seconds: 25);
 
   /// A push this recent counts as the host's room stamp. With the 25 s tick,
@@ -2517,7 +2518,7 @@ class ListenTogetherNotifier extends StateNotifier<ListenTogetherState> {
       'action': action,
       if (valueMs != null) 'valueMs': valueMs,
       if (toIndex != null) 'toIndex': toIndex,
-      // AS A STRING, not a map. firestore.rules can cap a string's length but
+      // AS A STRING, not a map. The server rules can cap a string's length but
       // not the strings inside a nested map or list, and `track` carries both
       // (a Song map with an artists list) on a document every member
       // downloads. Hosts still accept the legacy `track` map; see

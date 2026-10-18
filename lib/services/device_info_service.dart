@@ -159,7 +159,7 @@ class DeviceInfoService {
         var candidate = lookupAppleMachine(i.utsname.machine) ?? i.modelName.trim();
         if (candidate.isEmpty || candidate.toLowerCase() == 'unknown device' || candidate == 'iPhone') {
           final mapped = lookupAppleMachine(i.utsname.machine);
-          // Never use `i.name`: that's the name the owner gave the phone ("Alex's
+          // Never use `i.name`: that's the name the phone was given ("<name>'s
           // iPhone"), and this label is stored on the server and in synced history.
           if (mapped != null && mapped.isNotEmpty) {
             candidate = mapped;

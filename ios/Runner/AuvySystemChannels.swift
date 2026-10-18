@@ -578,6 +578,20 @@ final class AuvySystemChannels: NSObject {
     /// length, so the notification button can reschedule without Dart running.
     private static let planKey = "auvy.signing.plan"
     private static let lengthKey = "auvy.signing.lengthMs"
+    /// How the last refresh was confirmed: "shortcut" (Mark Auvy as Refreshed),
+    /// "notification" (the reminder's button) or "app". Shown in Settings, so a
+    /// working automation can be seen to work.
+    private static let refreshedViaKey = "auvy.signing.refreshedVia"
+
+    /// One scheduled reminder. A quiet one arrives without sound or lighting the
+    /// screen; the last one before the expiry is not quiet.
+    struct SigningReminderItem {
+        let id: String
+        let at: Date
+        let title: String
+        let body: String
+        let quiet: Bool
+    }
 
     static func registerSigningCategory() {
         let refreshed = UNNotificationAction(
@@ -591,7 +605,7 @@ final class AuvySystemChannels: NSObject {
     /// Replaces every pending and delivered reminder with [items] (those still
     /// ahead). Shared by the app's "schedule" call and the notification button.
     static func replaceSigningReminders(
-        _ items: [(id: String, at: Date, title: String, body: String)],
+        _ items: [SigningReminderItem],
         completion: @escaping (Int) -> Void
     ) {
         let center = UNUserNotificationCenter.current()
@@ -610,7 +624,10 @@ final class AuvySystemChannels: NSObject {
                     let content = UNMutableNotificationContent()
                     content.title = item.title
                     content.body = item.body
-                    content.sound = .default
+                    content.sound = item.quiet ? nil : .default
+                    if #available(iOS 15.0, *) {
+                        content.interruptionLevel = item.quiet ? .passive : .active
+                    }
                     content.categoryIdentifier = signingCategory
                     center.add(UNNotificationRequest(
                         identifier: prefix + item.id, content: content,
@@ -622,26 +639,39 @@ final class AuvySystemChannels: NSObject {
         }
     }
 
-    /// Records a refresh now, and, from the notification button, reschedules the
-    /// saved plan against the new expiry (now + the profile's length).
-    static func signingRefreshed(reschedule: Bool, completion: @escaping () -> Void) {
+    /// Records a refresh now, and how it was confirmed ([via]), and, from the
+    /// notification button or the shortcut, reschedules the saved plan against
+    /// the new expiry (now + the profile's length).
+    static func signingRefreshed(reschedule: Bool, via: String,
+                                 completion: @escaping () -> Void) {
         let now = Date()
         let defaults = UserDefaults.standard
         defaults.set(Int64(now.timeIntervalSince1970 * 1000), forKey: refreshedKey)
+        defaults.set(via, forKey: refreshedViaKey)
         guard reschedule,
               let plan = defaults.array(forKey: planKey) as? [[String: Any]],
               let lengthMs = (defaults.object(forKey: lengthKey) as? NSNumber)?.doubleValue,
               lengthMs > 0
         else { completion(); return }
         let expires = now.addingTimeInterval(lengthMs / 1000)
-        let items: [(id: String, at: Date, title: String, body: String)] = plan.compactMap {
+        let items: [SigningReminderItem] = plan.compactMap {
             guard let id = $0["id"] as? String,
                   let offsetMs = ($0["offsetMs"] as? NSNumber)?.doubleValue,
                   let title = $0["title"] as? String,
                   let body = $0["body"] as? String else { return nil }
-            return (id, expires.addingTimeInterval(-offsetMs / 1000), title, body)
+            return SigningReminderItem(
+                id: id, at: expires.addingTimeInterval(-offsetMs / 1000),
+                title: title, body: body, quiet: $0["quiet"] as? Bool ?? false)
         }
         replaceSigningReminders(items) { _ in completion() }
+    }
+
+    /// When a refresh made at [date] runs out: that moment plus the profile's
+    /// length, as the app last measured it (7 days, a free Apple ID's, before
+    /// it has).
+    static func expiryAfterRefresh(at date: Date = Date()) -> Date {
+        let ms = (UserDefaults.standard.object(forKey: lengthKey) as? NSNumber)?.doubleValue ?? 0
+        return date.addingTimeInterval(ms > 0 ? ms / 1000 : 7 * 24 * 3600)
     }
 
     /// When this install stops opening: the ExpirationDate of the provisioning
@@ -677,9 +707,12 @@ final class AuvySystemChannels: NSObject {
                 forKey: AuvySystemChannels.refreshedKey) as? NSNumber {
                 out["refreshedMs"] = refreshed.int64Value
             }
+            if let via = UserDefaults.standard.string(forKey: AuvySystemChannels.refreshedViaKey) {
+                out["refreshedVia"] = via
+            }
             result(out)
         case "markRefreshed":
-            AuvySystemChannels.signingRefreshed(reschedule: false) {
+            AuvySystemChannels.signingRefreshed(reschedule: false, via: "app") {
                 DispatchQueue.main.async {
                     result((UserDefaults.standard.object(
                         forKey: AuvySystemChannels.refreshedKey) as? NSNumber)?.int64Value)
@@ -705,12 +738,14 @@ final class AuvySystemChannels: NSObject {
             // holds. Delivered ones go too, since the app is open to say it now.
             let args = call.arguments as? [String: Any] ?? [:]
             let raw = args["reminders"] as? [[String: Any]] ?? []
-            let items: [(id: String, at: Date, title: String, body: String)] = raw.compactMap {
+            let items: [SigningReminderItem] = raw.compactMap {
                 guard let id = $0["id"] as? String,
                       let atMs = ($0["atMs"] as? NSNumber)?.doubleValue,
                       let title = $0["title"] as? String,
                       let body = $0["body"] as? String else { return nil }
-                return (id, Date(timeIntervalSince1970: atMs / 1000), title, body)
+                return SigningReminderItem(
+                    id: id, at: Date(timeIntervalSince1970: atMs / 1000),
+                    title: title, body: body, quiet: $0["quiet"] as? Bool ?? false)
             }
             // Kept as offsets before the expiry, so the notification button can
             // reschedule after a refresh with Auvy closed.
@@ -718,7 +753,7 @@ final class AuvySystemChannels: NSObject {
                let lengthMs = (args["lengthMs"] as? NSNumber)?.doubleValue {
                 let plan: [[String: Any]] = items.map {
                     ["id": $0.id, "offsetMs": expiresMs - $0.at.timeIntervalSince1970 * 1000,
-                     "title": $0.title, "body": $0.body]
+                     "title": $0.title, "body": $0.body, "quiet": $0.quiet]
                 }
                 UserDefaults.standard.set(plan, forKey: AuvySystemChannels.planKey)
                 UserDefaults.standard.set(lengthMs, forKey: AuvySystemChannels.lengthKey)
@@ -939,7 +974,9 @@ final class AuvyNotificationDelegate: NSObject, UNUserNotificationCenterDelegate
         // "I've refreshed" on a refresh reminder: recorded and rescheduled here,
         // so it works with Auvy closed (iOS launches it in the background).
         if response.actionIdentifier == AuvySystemChannels.signingRefreshedAction {
-            AuvySystemChannels.signingRefreshed(reschedule: true) { completionHandler() }
+            AuvySystemChannels.signingRefreshed(reschedule: true, via: "notification") {
+                completionHandler()
+            }
             return
         }
         if !response.notification.request.identifier.hasPrefix("auvy."),

@@ -5,7 +5,8 @@ import Foundation
 // AuvyCommands and says back what happened ("Shuffling Liked Songs"). Defined in
 // the app, so they run in its process; the ones that start music are
 // AudioPlaybackIntents so iOS lets them start it from the background. iOS 17 and
-// newer, like the widgets.
+// newer, like the widgets, except MarkRefreshedIntent (iOS 16), which belongs to
+// a SideStore refresh shortcut rather than to the player.
 //
 // Android has no equivalent of Siri phrases for a third-party player; its
 // counterparts are the icon's long-press menu, pinned playlist shortcuts and
@@ -251,6 +252,43 @@ struct LikeSongIntent: AudioPlaybackIntent, ForegroundContinuableIntent {
     func perform() async throws -> some IntentResult & ProvidesDialog {
         let message = try await runPlayerCommand("toggleLike", from: "siri")
         return .result(dialog: spoken(message, "Done"))
+    }
+}
+
+/// The last step of a SideStore refresh shortcut: tells Auvy the renewal
+/// happened, so its expiry reminders count from now.
+///
+/// A SideStore refresh changes nothing Auvy can read (see
+/// AuvySystemChannels.signingRefreshed), so after an automatic refresh the
+/// reminders kept counting down to the old date. Placed after SideStore's
+/// "Refresh All Apps", this runs only when the refresh worked, because a failed
+/// action stops the shortcut. It records the refresh and moves the reminders
+/// here, without opening Auvy; the app reads the same record when it next
+/// comes to the front. iOS 16 and newer, unlike the player intents above: it
+/// needs nothing from iOS 17, and a refresh concerns every sideloaded install.
+/// Not one of AuvyShortcuts' phrases (Apple allows ten, all taken); it is in
+/// the Shortcuts app's list of Auvy actions.
+@available(iOS 16.0, *)
+struct MarkRefreshedIntent: AppIntent {
+    static let title: LocalizedStringResource = "Mark Auvy as Refreshed"
+    static let description = IntentDescription(
+        "Tells Auvy that SideStore just renewed it, so its reminders count from now. Put it after SideStore's Refresh All Apps.")
+    static let openAppWhenRun = false
+
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+            AuvySystemChannels.signingRefreshed(reschedule: true, via: "shortcut") {
+                done.resume()
+            }
+        }
+        // Said, so a run by hand shows it worked: a refresh made just after an
+        // install moves the date by a minute, and nothing else changes on screen.
+        // An automation can hide it with the action's Show When Run.
+        let until = DateFormatter()
+        until.dateStyle = .medium
+        until.timeStyle = .short
+        return .result(dialog: IntentDialog(stringLiteral:
+            "Auvy is signed until \(until.string(from: AuvySystemChannels.expiryAfterRefresh()))."))
     }
 }
 

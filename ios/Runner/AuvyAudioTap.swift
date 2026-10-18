@@ -9,7 +9,7 @@ import os
 /// five-band equaliser and a gain stage, without swapping the player for
 /// AVAudioEngine (which cannot play the files this player fetches the way it
 /// does). The bands match Android's: 60, 230, 910, 3600 and 14000 Hz, ±12 dB, so
-/// the Settings sliders mean the same thing on both phones.
+/// the Settings sliders mean the same thing on both platforms.
 ///
 /// Attached only while something is switched on. With the equaliser off and no
 /// loudness correction, items play exactly as they did before this existed.

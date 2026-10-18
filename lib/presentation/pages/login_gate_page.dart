@@ -62,8 +62,8 @@ class _LoginGatePageState extends ConsumerState<LoginGatePage>
   /// be about to reverse.
   bool _recheckingVerdict = false;
 
-  /// Which account was refused, as the Worker resolved it. Shown so the owner can
-  /// be told exactly which address to approve.
+  /// Which account was refused, as the Worker resolved it. Shown so whoever
+  /// approves accounts can be told exactly which address to approve.
   String? _gateIdentity;
 
   /// The HTTP code and error the Worker actually returned.

@@ -1886,7 +1886,7 @@ class AccountNotifier extends StateNotifier<AccountState> {
     try {
       // Re-read, not rebuilt: a rebuilt notifier re-subscribes to the platform,
       // which reports "no network" for a moment (a fake offline blip after
-      // every restore, seen on the iPhone).
+      // every restore, seen on iOS).
       await _ref.read(connectivityProvider.notifier).reloadFromStorage();
     } catch (_) {}
     try {
@@ -2467,8 +2467,8 @@ class AccountNotifier extends StateNotifier<AccountState> {
         // Held: another device pushed since this one last synced, so that push
         // sent nothing. Merge its copy in (the merge keeps this device's own
         // unpushed edits) and push again. The wipe used to follow straight away,
-        // while the catch-up the hold starts was still running (seen 2026-10-17
-        // on the iPhone), so edits not yet backed up would have gone with it.
+        // while the catch-up the hold starts was still running (seen 2026-10-17),
+        // so edits not yet backed up would have gone with it.
         // Bounded, since a sign-out must not hang.
         if (CloudSyncService.instance.needsRemoteMerge) {
           await () async {

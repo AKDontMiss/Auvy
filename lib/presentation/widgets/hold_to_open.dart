@@ -35,7 +35,7 @@ class HoldToOpen extends StatefulWidget {
   /// (UILongPressGestureRecognizer.allowableMovement) and close to Android's 8 dp
   /// touch slop, rather than Flutter's 18: with 18, a finger that rested for a
   /// moment and then started a slow scroll opened the menu as the list began to
-  /// move (seen on the iPhone, 2026-10-16, on every page with these tiles).
+  /// move (seen on iOS, 2026-10-16, on every page with these tiles).
   static const double slop = 10;
 
   /// Corner radius the ink is clipped to. Match the tile it wraps, or the ink

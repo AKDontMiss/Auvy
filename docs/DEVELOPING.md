@@ -2,7 +2,7 @@
 
 A guide for anyone who wants to read, build or change the code. For what the
 app does, see the [README](../README.md); for installing it on an iPhone, see
-[INSTALL.md](../INSTALL.md).
+[INSTALL.md](INSTALL.md).
 
 ---
 
@@ -150,7 +150,7 @@ Notes:
 
 ## Tests
 
-The test suite (over 1,300 tests) lives in the private development
+The test suite (over 1,400 tests) lives in the private development
 repository and is not part of this source release; nothing here needs it to
 build, run or change the app. Run `flutter analyze` before building a change.
 

@@ -118,7 +118,7 @@ class ListeningPolicy {
   static const String kAllowExternalPlayStart = 'auvy_allow_external_play';
 
   /// Ignore a headset PLAY that arrives just after a pause nobody made in the
-  /// app. Galaxy Buds (seen on both phones, 2026-10-15/16) send a pause when a bud
+  /// app. Galaxy Buds (seen on Android and iOS, 2026-10-15/16) send a pause when a bud
   /// leaves the ear or the phone reconnects, then a play a few seconds later on
   /// their own when it goes into the case or back in, and music started with
   /// the listener's hands nowhere near it. On by default; off for anyone who

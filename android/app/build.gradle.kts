@@ -42,8 +42,8 @@ android {
         // not read the pubspec value), and tag the release `v<name>+<code>`, e.g.
         // v1.2.9+2090. A bare `v1.2.9` parses as build 0 and the in-app updater will
         // never offer it.
-        versionCode = 2200
-        versionName = "1.4.0"
+        versionCode = 2210
+        versionName = "1.4.1"
 
         // Only the ARM ABIs are shipped: arm64-v8a for modern phones and
         // armeabi-v7a for 32-bit ones. x86_64 (emulators, some Chromebooks) is

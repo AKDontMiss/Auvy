@@ -3,9 +3,12 @@
 /// On iPhone Auvy is installed with SideStore, which signs it with the
 /// listener's Apple ID; on a free one the signature lasts 7 days. SideStore
 /// renews it in the background, but only while it can run with LocalDevVPN on,
-/// and when a renewal is missed Auvy simply stops opening. Local notifications
-/// are scheduled 2 days, 1 day and 3 hours before the expiry, and a card on
-/// Home says the same once 2 days remain.
+/// and when a renewal is missed Auvy simply stops opening. Two local
+/// notifications are scheduled, a quiet one a day before the expiry and a
+/// normal one 3 hours before, and a card on Home says the same once 2 days
+/// remain. A Shortcuts automation that refreshes SideStore and ends with
+/// "Mark Auvy as Refreshed" moves them on every run, so while it works they
+/// never arrive.
 ///
 /// Where the expiry comes from: the provisioning profile inside the app at
 /// install. A SideStore refresh does NOT update that file; it only installs a
@@ -28,16 +31,23 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// One scheduled reminder.
+/// One scheduled reminder. A [quiet] one arrives without sound or lighting the
+/// screen.
 class SigningReminder {
   final String id;
   final DateTime at;
   final String title;
   final String body;
-  const SigningReminder(this.id, this.at, this.title, this.body);
+  final bool quiet;
+  const SigningReminder(this.id, this.at, this.title, this.body, {this.quiet = false});
 
-  Map<String, Object> toChannel() =>
-      {'id': id, 'atMs': at.millisecondsSinceEpoch, 'title': title, 'body': body};
+  Map<String, Object> toChannel() => {
+        'id': id,
+        'atMs': at.millisecondsSinceEpoch,
+        'title': title,
+        'body': body,
+        'quiet': quiet,
+      };
 }
 
 /// How close the expiry is, for the Home card. Each stage can be dismissed on
@@ -54,6 +64,11 @@ SigningStage signingStage(DateTime expiresAt, DateTime now) {
 }
 
 const _howTo = 'Turn on LocalDevVPN, open SideStore and tap Refresh All';
+
+/// The install guide's section on letting a Shortcuts automation refresh
+/// SideStore and tell Auvy (its "Mark Auvy as Refreshed" action, iOS 16+).
+const kAutoRefreshGuideUrl =
+    'https://github.com/AKDontMiss/Auvy/blob/main/docs/INSTALL.md#refreshing-automatically';
 
 /// A free Apple ID's signature lasts this long; used when the profile doesn't
 /// say when it was made.
@@ -86,13 +101,14 @@ const kDefaultSigningLength = Duration(days: 7);
   return (expiresAt: expires, length: length, renewedUnseen: false);
 }
 
-/// The reminders still ahead for [expiresAt]: 2 days, 1 day and 3 hours before.
-/// Past ones are left out; the Home card covers the time already inside them.
+/// The reminders still ahead for [expiresAt]: a quiet one a day before and a
+/// normal one 3 hours before. Two, not three: they are the net under a refresh
+/// that didn't happen, and the Home card says it too from 2 days out. Past ones
+/// are left out; the card covers the time already inside them.
 List<SigningReminder> planSigningReminders(DateTime expiresAt, DateTime now) => [
-      SigningReminder('2d', expiresAt.subtract(const Duration(days: 2)),
-          'Auvy needs a refresh soon', 'Its signature runs out in 2 days. $_howTo.'),
       SigningReminder('1d', expiresAt.subtract(const Duration(days: 1)),
-          'Auvy runs out tomorrow', '$_howTo, or Auvy will stop opening.'),
+          'Auvy runs out tomorrow', '$_howTo, or Auvy will stop opening.',
+          quiet: true),
       SigningReminder('3h', expiresAt.subtract(const Duration(hours: 3)),
           'Auvy stops opening in 3 hours',
           '$_howTo now. Once it runs out, getting it back can take a computer.'),
@@ -124,6 +140,10 @@ class SigningReminderState {
   /// The last refresh the listener confirmed.
   final DateTime? refreshedAt;
 
+  /// How [refreshedAt] was confirmed: "shortcut" (the Shortcuts action),
+  /// "notification" (the reminder's button) or "app". Null before the first.
+  final String? refreshedVia;
+
   /// Null until the listener chooses; the Home card asks once.
   final bool? enabled;
 
@@ -137,6 +157,7 @@ class SigningReminderState {
     this.expiresAt,
     this.renewedUnseen = false,
     this.refreshedAt,
+    this.refreshedVia,
     this.enabled,
     this.permission = 'undecided',
     this.dismissed = '',
@@ -152,6 +173,7 @@ class SigningReminderState {
         expiresAt: expiresAt ?? this.expiresAt,
         renewedUnseen: renewedUnseen,
         refreshedAt: refreshedAt,
+        refreshedVia: refreshedVia,
         enabled: enabled ?? this.enabled,
         permission: permission ?? this.permission,
         dismissed: dismissed ?? this.dismissed,
@@ -218,6 +240,7 @@ class SigningReminderNotifier extends StateNotifier<SigningReminderState> {
           expiresAt: e?.expiresAt,
           renewedUnseen: e?.renewedUnseen ?? false,
           refreshedAt: refreshedAt,
+          refreshedVia: expiry?['refreshedVia'] as String?,
           enabled: enabled,
           permission: permission,
           dismissed: dismissed);

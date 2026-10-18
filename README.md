@@ -6,9 +6,9 @@
 
 ### Music, podcasts and radio for Android and iPhone
 
-**~115k lines of Dart** across 220 files &middot; **18 Kotlin** files on media3/ExoPlayer
+**~115k lines of Dart** across 221 files &middot; **19 Kotlin** files on media3/ExoPlayer
 &middot; **13 Swift** files on AVFoundation &middot; a **4k-line Cloudflare Worker** in front
-of the third-party APIs &middot; **1,410+ tests** in 139 files
+of the third-party APIs &middot; **1,430+ tests** in 141 files
 
 <br/>
 
@@ -68,10 +68,9 @@ Three problems drove almost every hard decision here, and they are the three I
 expect to meet again closer to the metal.
 
 **A boundary between two languages, which is where the interesting bugs live.**
-Dart drives 18 Kotlin files (and 13 Swift files on iPhone) over platform
-channels, including a
-`ChunkedDataSource` written against media3/ExoPlayer so a track can be
-re-resolved mid-playback without the player noticing. Every bug that took days
+Dart drives 19 Kotlin files (and 13 Swift files on iPhone) over platform
+channels, including a data-source layer written against media3/ExoPlayer that
+re-resolves a track's stream URL mid-playback without the player noticing. Every bug that took days
 sat on that seam. The subtlest: shared preferences are cached in memory per
 isolate, so a value Kotlin wrote stayed invisible to a running Dart isolate
 until it reloaded, and the feature only appeared to work after a restart.
@@ -261,7 +260,7 @@ setting that had silently stopped syncing for weeks, a stream format refused
 because two code paths asked for it differently. None of them produced a crash
 or anything a user could have described.
 
-**Testing what a type cannot express.** There are over 1,300 tests. Some assert on the
+**Testing what a type cannot express.** There are over 1,400 tests. Some assert on the
 source text itself, because several rules here are conventions the compiler
 cannot check. A preference filed under the wrong type is silently skipped at
 backup time, so a test derives the correct grouping instead of trusting me to
@@ -301,7 +300,7 @@ instruction was wrong.
 | | |
 |---|---|
 | Gapless | Next track buffered before it's needed |
-| Crossfade | Adjustable fade between tracks |
+| Fade in and out | Songs fade in as they start and out when you stop |
 | Skip silence | Trims dead air |
 | Normalise loudness | Evens out a mixed queue |
 | Equaliser | Five bands on both phones, plus pitch and tempo (Android) |
@@ -353,7 +352,7 @@ instruction was wrong.
 | Listen Together | Listen in sync with friends in a shared room |
 | Alarm | Wake to a song, not a ringtone (Android; iPhone on iOS 26 or newer) |
 | Scrobbling | Last.fm, ListenBrainz |
-| Refresh reminders | iPhone: a notification before the SideStore signature runs out |
+| SideStore refresh | iPhone: SideStore refreshes Auvy by itself through a Shortcuts automation that Auvy walks you through, with a reminder if a renewal is missed |
 | Android Auto | Browse and play in the car |
 | Widgets | Now Playing in small, medium and large (with Up Next): where it's playing from, progress, play, skip and like; tap the song for its playlist or album. Your Mixes: four lists, one tap each. iPhone: lock screen and Control Center too |
 | Siri and Shortcuts | iPhone: "Shuffle my liked songs in Auvy", "Play Weekly Discovery in Auvy", any playlist by name, search and play |
@@ -400,7 +399,7 @@ https://github.com/AKDontMiss/Auvy/releases/latest/download/source.json
 ```
 
 Step-by-step instructions, including the one-time SideStore setup, are in
-[INSTALL.md](INSTALL.md). Needs iOS 15 or newer.
+[INSTALL.md](docs/INSTALL.md). Needs iOS 15 or newer.
 
 ---
 
@@ -409,7 +408,8 @@ Step-by-step instructions, including the one-time SideStore setup, are in
 - Built for phones; there's no tablet layout.
 - On iPhone a few Android features aren't available (pitch, skip silence,
   recognising another app's audio), and the wake-up alarm needs iOS 26. Siri,
-  Shortcuts and the widgets need iOS 17. See [ios/README.md](ios/README.md).
+  Shortcuts and the widgets need iOS 17 (the SideStore refresh action, iOS 16).
+  See [ios/README.md](ios/README.md).
 - You need a signed-in Google account for the catalogue to work properly.
 - Two phones on one account share their library, history and settings through
   the encrypted backup, so changes reach the other phone when it next syncs
@@ -469,7 +469,7 @@ Auvy leans on a lot of other people's work.
 | Last.fm, Deezer | Artist tags, metadata, portraits |
 | iTunes Search API | Release dates for What's New, podcast search |
 
-[NOTICE.md](NOTICE.md) has the file-by-file detail of what's derived from where.
+[NOTICE.md](docs/NOTICE.md) has the file-by-file detail of what's derived from where.
 That's also why Auvy is GPL-3.0.
 
 ### Disclaimer

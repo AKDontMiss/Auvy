@@ -508,7 +508,7 @@ class AuvyAudioHandler extends BaseAudioHandler with QueueHandler {
 
   /// How soon after a pause nobody made in the app a headset PLAY is taken for
   /// the earbud's own doing. Galaxy Buds sent theirs 2.7 to 5.9 s after the
-  /// pause on the owner's phones (iPhone and Android).
+  /// pause, on iPhone and Android alike.
   static const Duration kEarbudBounceWindow = Duration(seconds: 7);
 
   /// Whether a headset PLAY now is an earbud sensor rather than a press: the

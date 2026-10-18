@@ -1659,13 +1659,13 @@ extension PlayerSystemController on PlayerNotifier {
   /// Puts a just-loaded [song] at [target] and keeps it there.
   ///
   /// A seek sent before the native player has the track can be dropped, and its
-  /// first position reports (0:00) then reset the bar: seen on both phones
-  /// (2026-10-16), a song handed over from the other phone showed the right
+  /// first position reports (0:00) then reset the bar: seen on Android and iOS
+  /// (2026-10-16), a song handed over from another device showed the right
   /// second and then went back to 0:00, and was handed back from there. So the
   /// target is held like a user's seek (stale reports ignored), and the
   /// player's own reports are watched for eight seconds: whenever one lands more
   /// than two seconds off (including a report that looked right and then a
-  /// restart from 0:00 once a fetched file arrived, seen on the iPhone), it
+  /// restart from 0:00 once a fetched file arrived, seen on iOS), it
   /// seeks again, at most five times. While [playing], the target moves on with
   /// the clock. It stops as soon as the listener does something themselves:
   /// another seek, a play or pause tap, or another song.

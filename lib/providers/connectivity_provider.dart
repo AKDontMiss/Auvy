@@ -195,7 +195,7 @@ class ConnectivityNotifier extends StateNotifier<ConnectivityState> {
       if (!mounted) return;
       if (!isConnected) {
         // Going offline counts only if it lasts: the platform often reports "no
-        // network" for a moment (seen on the iPhone 21 times in a day, each
+        // network" for a moment (seen on iOS 21 times in a day, each
         // "Gone offline" and "Back online" in the same millisecond), and each
         // flip told every offline-aware part of the app to stand down.
         _offlineTimer?.cancel();

@@ -36,6 +36,7 @@ import 'package:auvy/providers/library_provider.dart';
 import 'package:auvy/presentation/widgets/splash_screen.dart';
 import 'package:auvy/services/cloud_sync_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:auvy/presentation/pages/sidestore_refresh_page.dart';
 import 'package:auvy/presentation/widgets/coach_marks.dart';
 import 'package:auvy/presentation/widgets/alarm_settings_block.dart';
 import 'package:auvy/presentation/widgets/info_hint.dart';
@@ -74,7 +75,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   /// the queries someone bothers to type.
   static const Map<String, String> _sectionKeywords = {
     'Motion': 'animation reduce transition',
-    'Playback': 'crossfade gapless normalize normalise volume skip silence '
+    'Playback': 'crossfade fade gapless normalize normalise volume skip silence '
         'autoplay similar connect audio quality video',
     'Sound': 'equalizer eq bass treble pitch speed stream sources clients '
         'loudness normalisation',
@@ -84,7 +85,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     'Data & Storage': 'cache size downloads storage offline data saver',
     'Account': 'sign out login backup sync cloud delete account profile',
     'About': 'version licence license build info',
-    'Updates': 'update check announce release apk',
+    'Updates': 'update check announce release apk sidestore refresh signature reminder shortcut',
   };
 
   bool _matches(String label) {
@@ -416,8 +417,11 @@ class _PlaybackToggles extends ConsumerWidget {
       _ToggleRow(
         icon: Icons.graphic_eq_rounded,
         tint: const Color(0xFFFFD54F),
-        title: "Crossfade",
-        subtitle: "Smooth transitions (${s.crossfadeSecs}s)",
+        // Fades, not a crossfade: between tracks gapless playback takes over (a
+        // true crossfade needs two streams at once). The setting keeps its old
+        // keys and its slider, which sets the fade-out when you stop.
+        title: "Fade in and out",
+        subtitle: "Songs fade in as they start, and out over ${s.crossfadeSecs}s when you stop",
         value: s.crossfade,
         onChanged: (_) => notifier.toggleCrossfade(),
       ),
@@ -3398,70 +3402,28 @@ class _WhatsNewAlertsRow extends ConsumerWidget {
   }
 }
 
-/// "Refresh reminders": notifications before the SideStore signature runs out.
-/// Only on an iPhone install that has one (not Android, not an App Store build).
+/// "SideStore refresh": the signature's status, opening the page that keeps it
+/// fresh (the automation, the reminders and the by-hand confirmation). Only on
+/// an iPhone install that has a signature (not Android, not an App Store build).
 class _SigningReminderRow extends ConsumerWidget {
   const _SigningReminderRow();
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final s = ref.watch(signingReminderProvider);
-    final expiresAt = s.expiresAt;
-    if (!Platform.isIOS || (expiresAt == null && !s.renewedUnseen)) {
+    if (!Platform.isIOS || (s.expiresAt == null && !s.renewedUnseen)) {
       return const SizedBox.shrink();
     }
-    final loc = MaterialLocalizations.of(context);
-    final notifier = ref.read(signingReminderProvider.notifier);
-    // SideStore's refresh can't be seen from inside Auvy (it installs a new
-    // profile into iOS, not into the app), so the date shown is the one Auvy
-    // knows: from install, or from the last confirmed refresh.
-    final String signed;
-    if (expiresAt == null) {
-      signed = "SideStore renewed Auvy, but the new date can't be seen from here. "
-          "Tap \"I've refreshed\" after your next refresh.";
-    } else {
-      final until = '${loc.formatMediumDate(expiresAt)}, ${loc.formatTimeOfDay(
-          TimeOfDay.fromDateTime(expiresAt),
-          alwaysUse24HourFormat: MediaQuery.alwaysUse24HourFormatOf(context))}';
-      final left = formatSigningLeft(expiresAt.difference(DateTime.now()));
-      signed = 'Signed until $until ($left left).';
-    }
-    // On, but iOS won't show notifications: say where to fix it.
-    final blocked = s.enabled == true && s.permission == 'denied';
     return Column(
       children: [
         const _SectionDivider(),
-        _ToggleRow(
+        _NavRow(
           icon: Icons.verified_user_outlined,
           tint: const Color(0xFFA5D6A7),
-          title: "Refresh reminders",
-          subtitle: "$signed "
-              "${blocked ? "Notifications are off for Auvy in iOS Settings; tap to open them." : s.enabled == true ? "Reminds you 2 days, 1 day and 3 hours before." : "Turn on to be reminded before it runs out."}",
-          value: s.enabled == true && !blocked,
-          onChanged: (v) async {
-            if (blocked) {
-              await notifier.openSettings();
-            } else if (v) {
-              await notifier.enable();
-            } else {
-              await notifier.disable();
-            }
-          },
-        ),
-        const _SectionDivider(),
-        SettingsActionRow(
-          icon: Icons.refresh_rounded,
-          tint: const Color(0xFFA5D6A7),
-          title: "I've refreshed in SideStore",
-          subtitle: 'Tap after a refresh so the date and reminders follow it',
-          onTap: () async {
-            HapticService.selection();
-            await notifier.markRefreshed();
-            final at = ref.read(signingReminderProvider).expiresAt;
-            if (at != null) {
-              AnimatedToast.message('Got it: signed until ${loc.formatMediumDate(at)}');
-            }
-          },
+          title: "SideStore refresh",
+          subtitle: sideStoreRefreshSummary(context, s),
+          onTap: () => Navigator.push(
+              context, MainLayout.smoothRoute(const SideStoreRefreshPage())),
         ),
       ],
     );

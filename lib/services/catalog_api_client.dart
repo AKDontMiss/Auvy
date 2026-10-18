@@ -59,8 +59,8 @@ class CatalogApiClient {
 
   /// Whole-chain refusals in a row, across tracks, with no stream resolved in
   /// between. One means that video is unavailable (taken down, region-locked):
-  /// the chain refused it while other songs played fine either side (seen on
-  /// the Galaxy, 2026-10-16: four such videos in 23 minutes, each followed a
+  /// the chain refused it while other songs played fine either side (seen
+  /// 2026-10-16: four such videos in 23 minutes, each followed a
   /// second later by another upload playing). Two in a row is the signature of
   /// a visitor id that has gone stale, which affects every video.
   static int _chainRefusalsInARow = 0;

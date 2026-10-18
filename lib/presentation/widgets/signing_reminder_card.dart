@@ -112,8 +112,8 @@ class SigningReminderCard extends ConsumerWidget {
         title: 'Remind me before Auvy runs out?',
         body: 'SideStore signs Auvy for a few days at a time, and if a renewal is '
             'missed Auvy stops opening. This one lasts until '
-            '${loc.formatMediumDate(expiresAt)}. Get a notification 2 days, 1 day '
-            'and 3 hours before.',
+            '${loc.formatMediumDate(expiresAt)}. Get a quiet notification the day '
+            'before, and one 3 hours before.',
         primary: 'Remind me',
         onPrimary: () async {
           final ok = await notifier.enable();

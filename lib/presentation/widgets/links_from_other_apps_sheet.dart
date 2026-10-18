@@ -9,9 +9,18 @@ import 'package:auvy/presentation/widgets/animated_toast.dart';
 import 'package:auvy/providers/theme_provider.dart';
 import 'package:auvy/services/app_commands.dart';
 
-/// The owner's shared "Open in Auvy" shortcut (an iCloud link to the
-/// Shortcuts app). Empty until one is published; the sheet then shows the
-/// steps to build it instead of the one-tap install.
+/// The shared "Open in Auvy" shortcut (an iCloud link to the
+/// Shortcuts app). Empty, so the sheet shows the steps to build it instead of
+/// the one-tap install.
+///
+/// Stays empty while the shortcut uses Auvy's "Play a Music Link" action. On
+/// iPhone, SideStore installs Auvy under an id ending in the installer's own
+/// team id (`com.auvy.app.<team>`), and a shared shortcut names the maker's
+/// copy: on anyone else's phone that step doesn't resolve, and the shared file
+/// publishes the maker's team id. Only a shortcut with no app action of Auvy's
+/// (one that opens an `auvy://open?url=` link, say) works everywhere and names
+/// nobody. The public export refuses any iCloud shortcut link, and
+/// sidestore_auto_refresh_test keeps them out of the source.
 const String kOpenInAuvyShortcutUrl = '';
 
 /// How to send a Spotify, Apple Music or YouTube link to Auvy from another app.

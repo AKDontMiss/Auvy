@@ -771,7 +771,7 @@ class CloudSyncService {
     'app_density_name', // compact / comfortable list density
     'auvy_app_icon_variant', // which launcher icon is installed
     // The wake-up alarm's WHEN (on/off, time, repeat days) is not backed up: it
-    // belongs to the phone by the bed, and synced it made both phones ring, or
+    // belongs to the phone by the bed, and synced it made every phone ring, or
     // turned one off from the other. What it plays and how it sounds still sync.
     'auvy_alarm_source', // liked / top / recent / song
     // The COLLECTION the alarm draws from, beside the song it picked. Only one
@@ -1593,7 +1593,7 @@ class CloudSyncService {
   /// Settings older builds synced and this one deliberately doesn't: dropped
   /// from the manifest rather than carried as a newer version's (see
   /// carryUnknown). The wake-up alarm's time and days belong to the phone by the
-  /// bed; synced, both phones rang (see _stringKeys).
+  /// bed; synced, every phone on the account rang (see _stringKeys).
   static const Set<String> _retiredKeys = {
     'auvy_alarm_enabled',
     'auvy_alarm_hour',
@@ -1613,9 +1613,9 @@ class CloudSyncService {
   /// Keeps what a NEWER Auvy put in the backup that this build has no name for.
   ///
   /// A push writes the whole manifest, so a build used to drop every key it
-  /// didn't know. Seen 2026-10-17: the Galaxy's older APK left out the three
-  /// player settings the iPhone's newer build syncs (68 keys against 71), and
-  /// the iPhone uploaded them again after every Galaxy push. The same would
+  /// didn't know. Seen 2026-10-17: an older Android build left out three
+  /// player settings a newer iOS build syncs (68 keys against 71), and the
+  /// newer build uploaded them again after every push from the older one. The same would
   /// happen between any two versions on one account.
   ///
   /// Only keys this build has no name for are carried. Its own keys go up or
@@ -2125,7 +2125,7 @@ class CloudSyncService {
 
         // A backup with no library of the user's, over a phone that has one,
         // came from a phone that was reset and pushed before it restored (seen
-        // 2026-10-17: the iPhone's emptied library went up over the backup).
+        // 2026-10-17: a reset phone's empty library went up over the backup).
         // Nothing in it is taken, not even its other blobs (that phone's were
         // just as empty); this phone's whole copy goes up over it instead.
         if (!mergeOnly && !_accountResetting && !force && !libraryPlan.skip) {
@@ -2297,7 +2297,7 @@ class CloudSyncService {
       // and goes up next. Not only when merging: most settings (the accent, the
       // appearance) save without scheduling a backup, so "nothing but listening
       // telemetry pending" didn't mean nothing else changed. Seen 2026-10-16:
-      // the accent picked on the iPhone was replaced by the Galaxy's older one
+      // an accent picked on one phone was replaced by another phone's older one
       // at the next restore. Only an account reset or a forced restore takes
       // the cloud copy wholesale. Each applied one records its base for the
       // next merge.

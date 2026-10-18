@@ -119,7 +119,7 @@ class _EqualizerPainter extends CustomPainter {
 /// Each equalizer used to run its own 60 ms timer. The playing song often shows
 /// in several places at once (a home shelf, Quick Picks, the mosaic, rows kept
 /// loaded just off screen), and unsynchronised timers meant a frame for each:
-/// measured on the Galaxy (2026-10-17), ~25 frames a second on the home page,
+/// measured on Android (2026-10-17), ~25 frames a second on the home page,
 /// and each frame there is a whole-screen render (5-7 ms). Shared, they all step
 /// in the same frame, ~16 a second however many are showing.
 ///

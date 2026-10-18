@@ -104,7 +104,7 @@ const String kCoverOverrideDir = '/artwork_overrides/';
 /// each phone points the row back at its own copy after every load
 /// (`_reconcileCustomCovers`), so the path is noise in the backup, and a
 /// different noise on each phone: seen 2026-10-17, 15 such rows made the row
-/// list go up from both phones on nearly every push. Only paths into the
+/// list go up from every device on nearly every push. Only paths into the
 /// cover folder are blanked; any other value is left as it was.
 Object? withoutDevicePaths(Object? allItems) {
   if (allItems is! List) return allItems;
@@ -156,7 +156,7 @@ String keepDeviceOwned(String restored, String? local) {
 /// downloaded. Synced as "0 songs" and recounted by each device after a restore,
 /// so one phone's cache growing doesn't upload the row list and make the other
 /// phone take a count that isn't its own (and upload its own back): seen
-/// 2026-10-16, `auvy_lib::allItems` went up with most pushes from both phones.
+/// 2026-10-16, `auvy_lib::allItems` went up with most pushes from every device.
 const Set<String> kDeviceCountFolders = {'Cached', 'Downloads'};
 
 /// [allItems] with the per-device folders' counts neutralised (see

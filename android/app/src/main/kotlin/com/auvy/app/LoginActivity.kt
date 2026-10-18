@@ -284,7 +284,7 @@ class LoginActivity : Activity() {
             // Display-only: the Worker still derives identity from the cookies
             // it verifies itself. This exists because accounts with no YouTube
             // channel resolve to a numeric datasyncId, and a queue full of
-            // digits is unreviewable — the owner cannot tell who is asking.
+            // digits is unreviewable — whoever approves accounts cannot tell who is asking.
             setResult(RESULT_OK, Intent().putExtra(EXTRA_PICKED_EMAIL, emailHint))
             finish()
         }

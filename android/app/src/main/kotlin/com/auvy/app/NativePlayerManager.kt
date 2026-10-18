@@ -877,7 +877,7 @@ class NativePlayerManager(context: Context, private val channel: MethodChannel) 
 
     /// Puts the track back when its audio jumps ahead by itself.
     ///
-    /// Seen on the Galaxy (2026-10-17): with the app in the background, Android
+    /// Seen 2026-10-17: with the app in the background, Android
     /// took the Opus decoder back ("Released by resource manager"), ExoPlayer made
     /// a new one, and the first audio out of it was the track's last moment, so
     /// "Golden" lost 102 of its 195 seconds and the queue moved on. The audio sink
@@ -1998,7 +1998,7 @@ class NativePlayerManager(context: Context, private val channel: MethodChannel) 
             .setUpstreamDataSourceFactory(httpFactory)
             .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
 
-        return ResolvingDataSource.Factory(cacheFactory) { dataSpec ->
+        val resolving = ResolvingDataSource.Factory(cacheFactory) { dataSpec ->
             val key = dataSpec.key ?: return@Factory dataSpec
             val cache = getPlayerCache(appContext)
             // Next 512 KB already on disk? Serve from cache — no URL, no network.
@@ -2012,6 +2012,13 @@ class NativePlayerManager(context: Context, private val channel: MethodChannel) 
                 .withUri(Uri.parse(entry.url))
                 .subrange(dataSpec.uriPositionOffset, CHUNK_LENGTH)
                 .withAdditionalHeaders(mapOf("User-Agent" to entry.userAgent))
+        }
+        // Each cap above ended the read, and WebM takes an end that falls between two
+        // elements for the end of the song. ContinuousDataSource reads on across them.
+        return DataSource.Factory {
+            ContinuousDataSource(resolving.createDataSource()) { key ->
+                inUseContentLength[key] ?: songUrlCache[key]?.contentLength ?: 0L
+            }
         }
     }
 
