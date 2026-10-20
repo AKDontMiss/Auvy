@@ -54,7 +54,7 @@ class ContentMenus {
         t != 'null' &&
         t.toLowerCase() != 'single' &&
         t.toLowerCase() != song.title.trim().toLowerCase();
-    // diagnose "wrong album from a track" (#11): shows whether we open the
+    // diagnose "wrong album from a track" (#11): shows whether the menu opens the
     // track's own albumId directly (source data) vs resolve by name/track.
     print('buildAlbumForSong "${song.title}" by ${song.artist}: '
         'songAlbumId="${song.albumId}" albumTitle="${song.albumTitle}" '
@@ -177,6 +177,9 @@ class _SongMenuSheet extends ConsumerWidget {
   static Future<void> _startSongRadio(
       BuildContext context, WidgetRef ref, Color themeColor, Song song) async {
     HapticService.medium();
+    // Taken before the menu closes: its ref goes with it, and reading through it
+    // after the await below threw, so the radio never started.
+    final player = ref.read(playerProvider.notifier);
     Navigator.pop(context);
     AnimatedToast.show(context,
         text: 'Building song radio…',
@@ -191,7 +194,7 @@ class _SongMenuSheet extends ConsumerWidget {
       song,
       ...radio.where((s) => s.id != song.id),
     ];
-    ref.read(playerProvider.notifier).playSong(
+    player.playSong(
           song,
           newQueue: queue,
           source: 'Song radio',

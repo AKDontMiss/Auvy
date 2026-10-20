@@ -293,8 +293,7 @@ class DevicePresenceService {
   /// Whether an entry is this phone's own, from before its id changed (a
   /// sign-out and sign-in, a reinstall): the same install, or, for an entry an
   /// older build wrote without one, this phone's own name on this platform.
-  /// Such entries listed the phone as another device for a week (seen
-  /// 2026-10-17 on iOS).
+  /// Such entries listed the phone as another device for a week.
   @visibleForTesting
   static bool isOwnOldEntry(AuvyLiveDevice d,
       {required String myInstall, required String myName, required String myPlatform}) {
@@ -306,7 +305,7 @@ class DevicePresenceService {
   ///
   /// A phone whose id changed leaves its old entry behind until it removes it
   /// itself (see isOwnOldEntry), and meanwhile the account's other phones
-  /// listed it twice (seen 2026-10-17: two iPhones, one "12 hours ago"). The
+  /// listed it twice (the same phone, one entry hours old). The
   /// same install is the same phone; an entry an older build wrote has no
   /// install, so it is the same phone as a newer entry with its name and
   /// platform. Two phones of one model with their own installs both stay.
@@ -445,8 +444,8 @@ class DevicePresenceService {
   /// Takes this phone off the account's device list, on sign-out, while it is
   /// still signed in (the list belongs to the account). The entry used to stay
   /// for a week, and the phone signing back in, with a new id, got a second
-  /// one beside it: seen 2026-10-17, a phone listed itself as another
-  /// device. Sign-in publishes a fresh one as usual.
+  /// one beside it, so the phone listed itself as another device. Sign-in
+  /// publishes a fresh one as usual.
   Future<void> leave() async {
     final col = _devices;
     try {

@@ -49,7 +49,7 @@ class SessionAuthService {
       cookies.containsKey('__Secure-1PSID');
 
   /// Copies a session that still exists in the platform cookie store back into
-  /// our encrypted store. Returns true when an authenticated session was found.
+  /// Auvy's encrypted store. Returns true when an authenticated session was found.
   Future<bool> _rehydrateFromPlatformJar(
       {Duration timeout = const Duration(seconds: 5)}) async {
     final platform = await _readPlatformCookies('https://music.youtube.com')
@@ -66,8 +66,8 @@ class SessionAuthService {
   /// UI.
   ///
   /// Checked in order:
-  ///  1. Our encrypted cookies prove a session (fast path).
-  ///  2. Our copy was lost but the platform cookie store still has the session:
+  ///  1. Auvy's encrypted cookies prove a session (fast path).
+  ///  2. Auvy's copy was lost but the platform cookie store still has the session:
   ///     re-import it silently.
   ///  3. The "signed in, never signed out" marker is set: treat the user as signed
   ///     in and retry the re-import shortly in the background. A slow cold start or
@@ -97,7 +97,7 @@ class SessionAuthService {
       }
       return false;
     } catch (_) {
-      // On any failure, trust the durable state we have rather than ask for a login.
+      // On any failure, trust the durable state already held rather than ask for a login.
       try {
         if (await _cookieManager.hasPersistentSession()) return true;
         return await _cookieManager.hasAuthCookies();
@@ -107,7 +107,7 @@ class SessionAuthService {
     }
   }
 
-  /// One delayed background attempt to recover our cookie copy after a slow cold
+  /// One delayed background attempt to recover Auvy's cookie copy after a slow cold
   /// start.
   void _retryRehydrateSoon() {
     Future.delayed(const Duration(seconds: 10), () async {

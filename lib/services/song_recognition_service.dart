@@ -21,14 +21,14 @@ import 'package:auvy/services/http_pool.dart';
 import 'package:auvy/logic/recognition/audio_fingerprint.dart';
 
 /// Microphone capture parameters. 44.1 kHz mono is universally supported by
-/// Android mics; we resample to 16 kHz, which is what the signature format wants.
+/// Android mics; it is resampled to 16 kHz, which is what the signature format wants.
 const int _recordingSampleRate = 44100;
 
 /// Listening window. 12 s gives the fingerprint enough peaks for a solid match.
 const Duration _recordDuration = Duration(seconds: 12);
 
-/// Progressive query checkpoints (seconds of captured audio). We fingerprint +
-/// query at each and stop on the first confident match — fast for clear audio,
+/// Progressive query checkpoints (seconds of captured audio). A fingerprint is
+/// made and queried at each and stop on the first confident match — fast for clear audio,
 /// with escalating attempts for harder cases.
 const List<int> _checkpointsSec = [4, 7, 10, 12];
 
@@ -115,7 +115,7 @@ class SongRecognitionService {
   // agents and sending random coordinates to look like many users would be
   // evading the service's rate limits, which Auvy doesn't do. A plausible
   // Android string is used because the endpoint rejects clients it doesn't
-  // recognise. If the endpoint rate-limits us, accept the limit. Don't
+  // recognise. If the endpoint rate-limits Auvy, accept the limit. Don't
   // reintroduce rotation or fake coordinates.
   static const String _userAgent =
       'Dalvik/2.1.0 (Linux; U; Android 13; Pixel 7 Build/TQ3A.230805.001)';
@@ -198,7 +198,7 @@ class SongRecognitionService {
         encoder: AudioEncoder.pcm16bits,
         sampleRate: _recordingSampleRate,
         numChannels: 1,
-        // Mic tuning off: we want the raw signal, not voice-optimised audio.
+        // Mic tuning off: the raw signal is wanted, not voice-optimised audio.
         autoGain: false,
         echoCancel: false,
         noiseSuppress: false,

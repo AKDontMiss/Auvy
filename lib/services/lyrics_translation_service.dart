@@ -104,7 +104,7 @@ class LyricsTranslationService {
       }
 
       // Only cache if at least one non-blank line actually changed — otherwise the
-      // network was blocked and we don't want to pin a useless "translation".
+      // network was blocked, and a useless "translation" must not be pinned.
       var anyTranslated = false;
       for (var i = 0; i < lyrics.length; i++) {
         if (lyrics[i].trim().isNotEmpty && result[i] != lyrics[i]) {

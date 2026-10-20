@@ -12,13 +12,12 @@ import 'package:auvy/services/listening_policy.dart';
 /// the hold charges, ink splashes out from under the finger with the pressed
 /// highlight, and when it completes the splash bursts as the menu opens.
 ///
-/// It is the ink the Quick Picks rows always showed on a hold, the look the
-/// owner picked for every tile (2026-10-16): the splash the theme makes for an
-/// InkWell (InkSparkle on Android, InkRipple on iOS), in the theme's own splash
-/// and highlight colours, created the way an InkWell creates it. A first copy
-/// drew a lighter imitation of the iOS ripple instead, which looked like
-/// neither (owner, 2026-10-17: "you haven't apparently"). The ink goes on a
-/// see-through Material above the tile, so it shows over artwork too.
+/// It is the ink the Quick Picks rows always showed on a hold, used for every
+/// tile: the splash the theme makes for an InkWell (InkSparkle on Android,
+/// InkRipple on iOS), in the theme's own splash and highlight colours, created
+/// the way an InkWell creates it. A lighter imitation of the iOS ripple looked
+/// like neither. The ink goes on a see-through Material above the tile, so it
+/// shows over artwork too.
 ///
 /// One controller is the clock for both the ink and the action, so the menu
 /// opens as the ink bursts and the two can't drift apart.
@@ -35,7 +34,7 @@ class HoldToOpen extends StatefulWidget {
   /// (UILongPressGestureRecognizer.allowableMovement) and close to Android's 8 dp
   /// touch slop, rather than Flutter's 18: with 18, a finger that rested for a
   /// moment and then started a slow scroll opened the menu as the list began to
-  /// move (seen on iOS, 2026-10-16, on every page with these tiles).
+  /// move.
   static const double slop = 10;
 
   /// Corner radius the ink is clipped to. Match the tile it wraps, or the ink
@@ -280,9 +279,9 @@ class _HoldToOpenState extends State<HoldToOpen>
     // The same charge with Reduce motion on. The ink is touch feedback, which
     // the setting leaves alone (an InkWell's ink, Quick Picks' included, shows
     // either way, as iOS's own touch highlights do); only the press-in, a
-    // movement of the tile itself, is left out (see build). Until 2026-10-17
-    // this mode drew nothing, so with it on every tile but Quick Picks looked
-    // dead (owner: "still not working"). One path for both modes also retires
+    // movement of the tile itself, is left out (see build). This mode used to
+    // draw nothing, so with it on every tile but Quick Picks looked dead. One
+    // path for both modes also retires
     // the separate timer this mode had, the one that once fired after the
     // finger had lifted.
     _charge.forward(from: 0);

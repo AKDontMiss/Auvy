@@ -332,7 +332,7 @@ class _AlarmSettingsBlockState extends ConsumerState<AlarmSettingsBlock> {
   /// alarm pre-caches the FIRST track of it.
   Future<void> _pickCollection() async {
     final lib = ref.read(libraryProvider);
-    // Only collections we can actually play: a title with no tracks would arm an
+    // Only collections that can actually play: a title with no tracks would arm an
     // alarm that has nothing to prepare.
     final names = lib.playlistSongs.entries
         .where((e) => e.value.isNotEmpty && !isFreshReserveKey(e.key))

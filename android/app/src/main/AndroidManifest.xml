@@ -55,7 +55,7 @@
     
     <application
         android:label="Auvy"
-        android:name="${applicationName}"
+        android:name=".AuvyApplication"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
         android:networkSecurityConfig="@xml/network_security_config"
@@ -73,16 +73,27 @@
              AuvyAudioHandler.getRoot prevents that by rejecting SystemUI's `recent` root
              while serving a real tree for Android Auto's `root`. If the lingering media
              control ever returns, check that getRoot override first rather than
-             removing this filter. -->
+             removing this filter.
+             Its icon is Android Auto's launcher icon (the car reads the media
+             service's, falling back to the app's); see ic_car_launcher.xml. -->
         <service
             android:name="com.ryanheise.audioservice.AudioService"
             android:foregroundServiceType="mediaPlayback"
+            android:icon="@mipmap/ic_car_launcher"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.media.browse.MediaBrowserService" />
             </intent-filter>
         </service>
-        
+
+        <!-- The library's collection tiles for Android Auto's grids (see
+             CarArtProvider). Exported because the car reads it from its own
+             process; it serves only those bundled images, read-only. -->
+        <provider
+            android:name=".CarArtProvider"
+            android:authorities="com.auvy.app.carart"
+            android:exported="true" />
+
         <receiver
             android:name="com.ryanheise.audioservice.MediaButtonReceiver"
             android:exported="true">
@@ -394,5 +405,9 @@
             <action android:name="android.intent.action.GET_CONTENT" />
             <data android:mimeType="*/*" />
         </intent>
+
+        <!-- Android Auto's connection state (AuvyApplication.isCarConnected): from
+             Android 11 another app's provider is invisible unless named here. -->
+        <provider android:authorities="androidx.car.app.connection" />
     </queries>
 </manifest>

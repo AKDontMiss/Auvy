@@ -72,7 +72,7 @@ class SigningReminderCard extends ConsumerWidget {
       final expired = stage == SigningStage.expired;
       // The reminder offer rides on this card rather than following it: a
       // second card sliding into the same place took a double tap on "Later"
-      // as "Not now" (seen on device).
+      // as "Not now".
       final offer = s.enabled == null && !expired;
       return _card(
         theme: theme,

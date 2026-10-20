@@ -42,8 +42,8 @@ android {
         // not read the pubspec value), and tag the release `v<name>+<code>`, e.g.
         // v1.2.9+2090. A bare `v1.2.9` parses as build 0 and the in-app updater will
         // never offer it.
-        versionCode = 2210
-        versionName = "1.4.1"
+        versionCode = 2211
+        versionName = "1.4.2"
 
         // Only the ARM ABIs are shipped: arm64-v8a for modern phones and
         // armeabi-v7a for 32-bit ones. x86_64 (emulators, some Chromebooks) is
@@ -139,6 +139,10 @@ flutter {
 dependencies {
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.appcompat:appcompat:1.6.1")
+    // MediaSessionCompat, for LiteralMediaKeys (a subclass of audio_service's
+    // session callback). The same version audio_service uses, which it keeps to
+    // itself (implementation, not api).
+    implementation("androidx.media:media:1.7.0")
     implementation("com.google.android.material:material:1.11.0")
     
     // Explicit Media3 components required by native audio interception loops

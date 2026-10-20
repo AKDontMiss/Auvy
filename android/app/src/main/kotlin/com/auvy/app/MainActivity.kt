@@ -26,7 +26,7 @@ class MainActivity : AudioServiceActivity() {
 
     // Pending early-dismiss for [lastToast]. Android exposes only LENGTH_SHORT
     // (~2s) and LENGTH_LONG (~3.5s) — there is no API for an arbitrary duration —
-    // so a shorter toast means showing it and cancelling it ourselves.
+    // so a shorter toast means showing it and cancelling it here.
     private val toastHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private var toastDismiss: Runnable? = null
 
@@ -428,8 +428,8 @@ class MainActivity : AudioServiceActivity() {
 
         // Cookie bridge: Android's CookieManager returns ALL cookies for a URL,
         // INCLUDING HttpOnly ones (SID, __Secure-3PSID, …) that the WebView's
-        // document.cookie can't see. Those are the real auth cookies, so we read
-        // them here to persist a YouTube login across restarts. (Replaces the
+        // document.cookie can't see. Those are the real auth cookies, so they are read
+        // here to persist a YouTube login across restarts. (Replaces the
         // discontinued webview_cookie_manager plugin, which broke on modern
         // Flutter by referencing the removed v1-embedding Registrar.)
         val cookieChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, cookieChannelName)

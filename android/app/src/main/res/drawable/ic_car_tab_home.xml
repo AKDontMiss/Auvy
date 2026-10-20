@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android Auto's Home tab: the app's own Home icon (Material home, rounded). The car tints it. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="24" android:viewportHeight="24">
+    <path android:fillColor="#FFFFFFFF" android:pathData="M9.98,18.98L9.98,14.02L14.02,14.02L14.02,18.98C14.02,19.55 14.44,20.02 15,20.02L18,20.02C18.56,20.02 18.98,19.55 18.98,18.98L18.98,12L20.72,12C21.14,12 21.38,11.44 21.05,11.11L12.66,3.61C12.28,3.28 11.72,3.28 11.34,3.61L2.95,11.11C2.62,11.44 2.86,12 3.28,12L5.02,12L5.02,18.98C5.02,19.55 5.44,20.02 6,20.02L9,20.02C9.56,20.02 9.98,19.55 9.98,18.98Z" />
+</vector>

@@ -17,7 +17,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.4.1+2210
+version: 1.4.2+2211
 
 environment:
   sdk: ^3.10.4
@@ -35,6 +35,14 @@ dependencies:
   flutter_riverpod: ^2.5.1
   flutter_svg: ^2.2.3
   audio_service: ^0.18.18
+  # Android: hands every Flutter engine, audio_service's background one included,
+  # to the app (AuvyApplication), so Android Auto works with Auvy closed.
+  auvy_engine_hook:
+    path: packages/auvy_engine_hook
+  # Declared explicitly although audio_service brings it: AuvyAudioHandler
+  # returns rxdart's ValueStream from subscribeToChildren (Android Auto's
+  # "this list changed"), and audio_service doesn't re-export it.
+  rxdart: ^0.28.0
   audio_session: ^0.2.2
   spotify: ^0.16.0
   package_info_plus: ^9.0.1 

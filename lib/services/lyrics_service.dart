@@ -498,8 +498,8 @@ class LyricsService {
 
   /// Query EVERY (non-excluded) source concurrently, score each returned
   /// candidate, and return the single best. This is what makes lyrics reliable:
-  /// instead of trusting whichever source answers first, we compare all of them
-  /// and keep the most trustworthy synced/duration-matched result.
+  /// instead of trusting whichever source answers first, all of them are compared
+  /// and it keeps the most trustworthy synced/duration-matched result.
   Future<_ScoredLyrics?> _scanAllSources(
     String title,
     String artist, {
@@ -1061,7 +1061,7 @@ class LyricsService {
       final durStr = (trackDurationMs != null && trackDurationMs > 0) ? trackDurationMs.toString() : null;
       print("Scanning all lyric sources for: $track by $artist${rotate ? ' (refetch → rotating source)' : ''}");
 
-      // On a refetch, exclude sources already chosen so we surface a DIFFERENT one.
+      // On a refetch, exclude sources already chosen so a DIFFERENT one surfaces.
       final excluded = rotate ? (_rejectedSources[cacheKey] ?? <String>{}) : <String>{};
 
       _ScoredLyrics? best = await _scanAllSources(track, artist, durationMs: durStr, exclude: excluded)
@@ -1092,7 +1092,7 @@ class LyricsService {
         // Remember the winner so the NEXT refetch rotates to a different source.
         final rejected = _rejectedSources.putIfAbsent(cacheKey, () => <String>{});
         rejected.add(best.source);
-        // Once we've cycled through everything, start the rotation over.
+        // Once everything has been cycled through, start the rotation over.
         if (rejected.length >= _externalProviders.length + 1) rejected.clear();
         // Bound the map so it can't grow unbounded across a long session.
         if (_rejectedSources.length > 60) {

@@ -18,7 +18,7 @@ import androidx.media3.datasource.TransferListener
  * an element as the end of the file, so whenever a 512 KB boundary fell exactly
  * between two elements (about one boundary in 350 for opus audio, so a few songs
  * in a hundred) the song ended there and ExoPlayer moved on to the next one, with
- * no error anywhere. Seen 2026-10-17: "Love Story" (316 s) advanced at 183 s.
+ * no error anywhere.
  *
  * A range that delivered everything its open promised stopped at the cap, not at
  * the end, so the next range is opened here. A range that ends short of its

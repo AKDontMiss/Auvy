@@ -18,8 +18,8 @@ import kotlin.math.min
  * bounded ranges (256 KB works) normally. Chunking the fetch, as yt-dlp and
  * NewPipe do, avoids that.
  *
- * [totalLength] must be the real content length (googlevideo's `clen`) so we
- * know when to stop without an open-ended request.
+ * [totalLength] must be the real content length (googlevideo's `clen`) so it's
+ * known when to stop without an open-ended request.
  */
 @UnstableApi
 class ChunkedDataSource(
@@ -132,8 +132,7 @@ class ChunkedDataSource(
         emptyChunkRetries = 0 // per-open budget, not per-source
         // Touch byte 0 before a mid-file range on a URL that hasn't served anything
         // yet: googlevideo can refuse a mid-file Range on such a "virgin" URL. This
-        // matters for seeks and for the first range after the 1 MiB prewarm. It costs
-        // two bytes per URL.
+        // matters for seeks. It costs two bytes per URL.
         if (position > 0L) primeFromStart()
         openNextChunk()
         return bytesRemaining

@@ -101,7 +101,7 @@ flowchart LR
         logic["Player logic<br/>queue · adaptive bitrate<br/>failure recovery"]
         native["Kotlin · media3/ExoPlayer<br/>Swift · AVFoundation"]
         bg["App closed<br/>recognition · What's New"]
-        disk[("Local storage<br/>prefs · play cache · downloads")]
+        disk[("Local storage<br/>prefs · song cache · downloads")]
     end
 
     yt["YouTube<br/>InnerTube + CDN"]
@@ -145,14 +145,16 @@ Following one song through it, from the tap to the speaker:
 1. You tap a song. The Dart side builds the queue and asks YouTube for the
    track's stream, picking an audio quality from the throughput it has
    actually measured on this connection.
-2. If the track is already in the play cache or your downloads, it plays from
-   disk and nothing goes over the network.
-3. Otherwise the native player fetches the audio straight from YouTube's CDN.
-   On Android, ExoPlayer streams it in byte ranges and keeps a copy in the play
-   cache as it goes. On iPhone the whole track is fetched to a file first,
-   because AVFoundation misreads YouTube's audio when it arrives as a stream.
-   Either way, if the URL expires partway through, the native side asks Dart
-   for a fresh one and carries on from the same byte.
+2. If the track is already cached, downloaded, or was fetched a moment ago,
+   it plays from disk and nothing goes over the network.
+3. Otherwise the native player fetches the whole track from YouTube's CDN to a
+   file, in bounded byte ranges, and then plays the file. Both platforms work
+   this way: on iPhone because AVFoundation misreads YouTube's audio when it
+   arrives as a stream, and on Android so the song's real waveform can be drawn
+   from the file. If the URL expires partway through, the native side asks Dart for
+   a fresh one and carries on from the same byte. The next track is fetched
+   the same way in the current one's last 25 seconds, so the change starts
+   from disk.
 4. Lyrics, artwork and other metadata come through the Worker and are cached
    on the phone, so a replay costs nothing.
 5. About half a minute in, the song counts as a play: the listening data on
@@ -299,7 +301,7 @@ instruction was wrong.
 
 | | |
 |---|---|
-| Gapless | Next track buffered before it's needed |
+| Gapless | The next song is on the phone before it's needed, so it starts with no gap |
 | Fade in and out | Songs fade in as they start and out when you stop |
 | Skip silence | Trims dead air |
 | Normalise loudness | Evens out a mixed queue |
@@ -320,7 +322,7 @@ instruction was wrong.
 | Downloads | Offline, in a folder your file manager can see |
 | Cache | Fills as you play, so replays cost no data |
 | Import | CSV, JSON, or a backup from another player |
-| Cloud backup | Encrypted, opt-in, yours only. Two phones on one account stay in step |
+| Cloud backup | Encrypted on the phone, opt-in. Two phones on one account stay in step |
 
 ### Discover
 
@@ -353,7 +355,7 @@ instruction was wrong.
 | Alarm | Wake to a song, not a ringtone (Android; iPhone on iOS 26 or newer) |
 | Scrobbling | Last.fm, ListenBrainz |
 | SideStore refresh | iPhone: SideStore refreshes Auvy by itself through a Shortcuts automation that Auvy walks you through, with a reminder if a renewal is missed |
-| Android Auto | Browse and play in the car |
+| Android Auto | Auvy's own look: the library's tiles in your colour. One-tap Home, your playlists, Library, Recent, search, and Like on the playing screen |
 | Widgets | Now Playing in small, medium and large (with Up Next): where it's playing from, progress, play, skip and like; tap the song for its playlist or album. Your Mixes: four lists, one tap each. iPhone: lock screen and Control Center too |
 | Siri and Shortcuts | iPhone: "Shuffle my liked songs in Auvy", "Play Weekly Discovery in Auvy", any playlist by name, search and play |
 | Shortcuts on the icon | Long-press the icon for Liked Songs, Weekly Discovery, My Top 50 or Search. Android: pin any playlist to the home screen, and a Quick Settings play/pause tile |
@@ -368,7 +370,7 @@ instruction was wrong.
 |---|---|
 | Accent colour | Six of them, or follow each song's cover. The launcher icon follows your pick |
 | Pure black | For OLED |
-| Player | Cover shape, the glow around it (it can pulse with the music), the background, progress bar style, controls colour |
+| Player | Cover shape, the glow around it (it can pulse with the music), the background, progress bar style (one draws the song's own waveform), controls colour |
 | Mini-player | Four styles: Card, Cover colour, Capsule, Fill |
 | List spacing | Compact, comfortable or spacious |
 | Haptics | On or off |
@@ -389,6 +391,9 @@ allow installs from this source the first time.
   **Scan app** rather than skipping it. It comes back clean, and each scan is
   what eventually stops the prompt appearing for the next person.
 - Updates come from the Releases tab. The app can tell you when there's a new one.
+- Android Auto shows only Play Store apps unless you allow others: in Android
+  Auto's settings, tap Version ten times, then ⋮ → Developer settings → Unknown
+  sources.
 
 ### iPhone
 
@@ -422,7 +427,11 @@ Step-by-step instructions, including the one-time SideStore setup, are in
 ## Privacy
 
 Your library lives on your phone. Cloud backup is off unless you turn it on, and
-it's encrypted so only your account can read it.
+it's encrypted on the phone before upload, so the store holds only ciphertext.
+It isn't end-to-end: Auvy's own service issues the key. Listen Together shares
+your name and what's playing with the people in the session while it lasts.
+Everything that leaves the phone, and how to have your data erased, is listed in
+the app under Settings → Privacy → Terms & data.
 
 No analytics. No tracking. No ads. Session cookies are encrypted on disk and only
 ever go to the service they belong to. Diagnostic logging is off by default,

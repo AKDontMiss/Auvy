@@ -251,7 +251,7 @@ class AlarmService {
         final prefs = await SharedPreferences.getInstance();
         // The file's current place, not the stored path: iOS moves the app's
         // folder on every update or SideStore refresh, and a stale path made
-        // the alarm fall back to the system tone (seen on device).
+        // the alarm fall back to the system tone.
         final file = await _alarmFile();
         final ready = prefs.getString(kTrackId) != null && file.existsSync();
         args['trackPath'] = ready ? file.path : null;
@@ -446,8 +446,8 @@ class AlarmService {
       }
       // A bounded range, as the play cache asks (audio_cache_manager): without
       // one YouTube sends at about playback speed, so a 4 MB track took over a
-      // minute and died whenever the phone was locked meanwhile (seen on iOS,
-      // as "File closed" on the next resume).
+      // minute and died whenever the phone was locked meanwhile (on iOS, as
+      // "File closed" on the next resume).
       final clen = int.tryParse(RegExp(r'[?&]clen=(\d+)').firstMatch(url)?.group(1) ?? '');
       if (clen != null && clen > 0) request.headers['Range'] = 'bytes=0-${clen - 1}';
       final response =

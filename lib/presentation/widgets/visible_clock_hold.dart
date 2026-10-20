@@ -4,9 +4,9 @@ import 'package:flutter/widgets.dart';
 ///
 /// A page covered by another (the player over Home, an album over the player)
 /// stays alive, and a clock its widgets held kept stepping: on Android every
-/// step renders the whole screen, for something nobody can see. Seen
-/// 2026-10-17: Home's now-playing bars under the player page added about 17
-/// frames a second. Flutter turns [TickerMode] off for covered pages, which is
+/// step renders the whole screen, for something nobody can see: Home's
+/// now-playing bars under the player page added about 17 frames a second.
+/// Flutter turns [TickerMode] off for covered pages, which is
 /// how it pauses their animations; this follows the same signal.
 mixin VisibleClockHold<T extends StatefulWidget> on State<T> {
   bool _wanted = false;

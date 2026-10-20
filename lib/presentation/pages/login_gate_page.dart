@@ -6,6 +6,7 @@ import 'package:auvy/logic/session_auth_service.dart';
 import 'package:auvy/logic/session_cookie_manager.dart';
 import 'package:auvy/presentation/widgets/dynamic_background.dart';
 import 'package:auvy/presentation/pages/onboarding_page.dart';
+import 'package:auvy/presentation/pages/terms_page.dart';
 import 'package:auvy/presentation/main_layout.dart';
 import 'package:auvy/providers/account_provider.dart';
 import 'package:auvy/providers/theme_provider.dart';
@@ -46,7 +47,7 @@ class _LoginGatePageState extends ConsumerState<LoginGatePage>
 
   /// Replaces the generic "sign-in didn't complete" line when the real reason is
   /// known and different — currently: the account signed in, but the cloud backup
-  /// could not be reached, so we must NOT treat the empty device as a new user.
+  /// could not be reached, so the empty device must NOT be treated as a new user.
   String? _failureNote;
   bool _finishing = false;
 
@@ -745,7 +746,8 @@ class _LoginGatePageState extends ConsumerState<LoginGatePage>
                               const SizedBox(width: 6),
                               Flexible(
                                 child: Text(
-                                  'Your sign-in stays on this device. Auvy never sees your password.',
+                                  'Auvy never sees your password. Signing in registers '
+                                  'this account and phone with Auvy for approval.',
                                   textAlign: TextAlign.center,
                                   style: TextStyle(
                                       color: Colors.white.withOpacity(0.66),
@@ -755,7 +757,22 @@ class _LoginGatePageState extends ConsumerState<LoginGatePage>
                               ),
                             ],
                           ),
-                          const SizedBox(height: 12),
+                          // What is sent and kept, readable before anything is: the
+                          // same statement as Settings → Privacy → Terms & data.
+                          TextButton(
+                            onPressed: () {
+                              HapticService.selection();
+                              Navigator.of(context).push(
+                                  MaterialPageRoute(builder: (_) => const TermsPage()));
+                            },
+                            child: Text('What Auvy sends and keeps',
+                                style: TextStyle(
+                                    color: Colors.white.withOpacity(0.8),
+                                    fontSize: 11.5,
+                                    decoration: TextDecoration.underline,
+                                    decorationColor: Colors.white.withOpacity(0.5))),
+                          ),
+                          const SizedBox(height: 4),
                           // Use-at-your-own-risk notice, on this screen because this is where a person hands
                           // over an account. Auvy uses interfaces the service doesn't publish for
                           // third-party apps, and any consequence falls on the signed-in account, so people

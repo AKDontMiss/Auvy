@@ -163,11 +163,10 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
     try {
       final prefs = await SharedPreferences.getInstance();
       _hasOnboarded = prefs.getBool('has_onboarded') ?? false;
-      // The flag alone must not decide. Seen on device (2026-10-15): it went
-      // missing from the saved settings while everything else of the user's
-      // stayed, and a signed-in listener with a full library was sent to
-      // onboarding. A device that has an owner stamped on its data and a library
-      // belongs to someone who has used Auvy: repair the flag instead.
+      // The flag alone must not decide: it can go missing from the saved settings
+      // while everything else stays, and a signed-in listener with a full library
+      // was then sent to onboarding. A device that has an owner stamped on its data
+      // and a library belongs to someone who has used Auvy: repair the flag instead.
       if (!_hasOnboarded && hasEstablishedLocalUser(prefs)) {
         _hasOnboarded = true;
         await prefs.setBool('has_onboarded', true);

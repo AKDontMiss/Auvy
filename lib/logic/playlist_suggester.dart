@@ -263,7 +263,7 @@ Future<List<Song>> suggestTracksForPlaylist({
   final maxWeight = fp.artistWeight.values.isEmpty
       ? 1.0
       : fp.artistWeight.values.reduce(math.max);
-  // Blend, scaled by how much this playlist tells us. Both halves are normalised to
+  // Blend, scaled by how much this playlist reveals. Both halves are normalised to
   // 0..1 before mixing, so the ratio means something. The weights come from the
   // fingerprint (see `_fingerprint`): a 5-track scratch list lands near 0.55
   // playlist / 0.45 taste, a 60-track playlist around a few artists near 0.92 /

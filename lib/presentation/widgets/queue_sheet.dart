@@ -88,6 +88,7 @@ class _QueueSheetState extends ConsumerState<QueueSheet> {
     final queue         = ref.watch(playerProvider.select((ps) => ps.queue));
     final isShuffle     = ref.watch(playerProvider.select((ps) => ps.isShuffle));
     final history       = ref.watch(playerProvider.select((ps) => ps.history));
+    final historyCursor = ref.watch(playerProvider.select((ps) => ps.historyCursor));
     final contextTitle  = ref.watch(playerProvider.select((ps) => ps.contextTitle));
     final isPlaying     = ref.watch(playerProvider.select((ps) => ps.isPlaying));
 
@@ -111,10 +112,21 @@ class _QueueSheetState extends ConsumerState<QueueSheet> {
     if (currentSong != null) {
       final currentId = currentSong.id;
 
+      // After Previous, the tracks stepped back over play next (see
+      // PlayerState.historyAhead), so they are listed as upcoming, and Recently
+      // Played starts below the track playing. They used to be listed as played,
+      // while Next went to them.
+      final ahead = (historyCursor > 0 && historyCursor < history.length)
+          ? history.sublist(0, historyCursor).reversed.where((s) => s.id != currentId).toList()
+          : const <Song>[];
+      final played = historyCursor > 0 && historyCursor < history.length
+          ? history.skip(historyCursor + 1)
+          : history;
+
       // History (Deduplicated, older first)
-      final seenIds = <String>{currentId};
+      final seenIds = <String>{currentId, for (final s in ahead) s.id};
       final distinctHistory = <Song>[];
-      for (final song in history) {
+      for (final song in played) {
         if (!seenIds.contains(song.id)) {
           seenIds.add(song.id);
           distinctHistory.add(song);
@@ -137,8 +149,14 @@ class _QueueSheetState extends ConsumerState<QueueSheet> {
       final safeUser    = userQueue.where((s) => s.id != currentId).toList();
       final safeContext = contextQueue.where((s) => s.id != currentId).toList();
       final safeAuto    = autoplayQueue.where((s) => s.id != currentId).toList();
-      upcomingCount = safeUser.length + safeContext.length + safeAuto.length;
+      upcomingCount = ahead.length + safeUser.length + safeContext.length + safeAuto.length;
 
+      if (ahead.isNotEmpty) {
+        displayItems.add({'item': "Playing Next", 'realIdx': -1, 'zone': 'header'});
+        for (final s in ahead) {
+          displayItems.add({'item': s, 'realIdx': -2, 'zone': 'ahead'});
+        }
+      }
       if (safeUser.isNotEmpty) {
         displayItems.add({'item': "Next in Queue", 'realIdx': -1, 'zone': 'header'});
         for (final s in safeUser) {

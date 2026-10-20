@@ -59,6 +59,12 @@ class SliderStyleNotifier extends StateNotifier<SliderStyle> {
     }
   }
 
+  /// Whether the waveform style is the saved choice, read from storage, for code
+  /// that runs without a ref (TrackWaveform decides from it whether to decode a
+  /// song as soon as its file is in).
+  static Future<bool> waveformChosen() async =>
+      (await SharedPreferences.getInstance()).getString(_kName) == SliderStyle.waveform.name;
+
   Future<void> setStyle(SliderStyle style) async {
     state = style;
     final prefs = await SharedPreferences.getInstance();

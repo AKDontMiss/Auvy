@@ -16,8 +16,8 @@
 /// the profile actually in use. So after a refresh Auvy has to be told: "I've
 /// refreshed" on the card, in Settings or on the reminder itself records it,
 /// and the expiry becomes that moment plus the profile's length (7 days on a
-/// free Apple ID). Seen on device: a refresh worked and the reminders kept
-/// counting down to the old date.
+/// free Apple ID). Otherwise a refresh worked and the reminders kept counting
+/// down to the old date.
 ///
 /// Nothing leaves the phone. The setting is per device and not backed up, since
 /// each phone has its own signature.

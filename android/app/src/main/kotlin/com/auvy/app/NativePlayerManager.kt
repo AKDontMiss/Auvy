@@ -95,6 +95,46 @@ class NativePlayerManager(context: Context, private val channel: MethodChannel) 
             }
         }
         private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+        /** One waveform decode at a time, off the main thread (see WaveformDecoder). */
+        private val waveformExecutor = java.util.concurrent.ThreadPoolExecutor(
+            1, 1, 60L, java.util.concurrent.TimeUnit.SECONDS, java.util.concurrent.LinkedBlockingQueue(),
+        ) { r ->
+            // Below playback and the UI; ended after a minute unused.
+            Thread({
+                android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
+                r.run()
+            }, "waveform")
+        }.apply { allowCoreThreadTimeOut(true) }
+        /** Bumped by every waveform request; a decode for an older one stops. */
+        private val waveformRequest = java.util.concurrent.atomic.AtomicInteger()
+        /** The instance whose channel is active, for work the position tick starts. */
+        @Volatile private var latest: NativePlayerManager? = null
+
+        /** Bumped by every playVideo; a fetch for an older one is dropped. */
+        @Volatile private var playGeneration = 0
+
+        /**
+         * The song being fetched before it plays (see fetchThenPlay). Until its
+         * file is ready the player still holds the previous song, as on iOS: a seek
+         * asked for now is held for the new song, and play/pause only set the
+         * intent it starts with.
+         */
+        @Volatile private var awaitingVideo: String? = null
+        @Volatile private var awaitingPlay = false
+        @Volatile private var heldStartMs = 0L
+
+        /**
+         * The next song Dart named (setUpcoming or prewarmNext), whether it is queued
+         * for a gapless change, and whether it still waits to be fetched whole in the
+         * current one's last [PREFETCH_LEAD_MS] (prefetchIfDue). A fetch that
+         * finishes after Dart named another song is kept on disk but not queued.
+         */
+        @Volatile private var upcomingWanted: String? = null
+        @Volatile private var upcomingGapless = false
+        @Volatile private var upcomingToFetch: String? = null
+
+        /** As the iOS player's prefetchLeadSeconds. */
+        private const val PREFETCH_LEAD_MS = 25_000L
 
         // "Pause when muted" watcher.
         // Android doesn't pause playback when the volume hits zero, so this watches
@@ -155,9 +195,9 @@ class NativePlayerManager(context: Context, private val channel: MethodChannel) 
         // (permission-free).
         @Volatile private var audioManager: android.media.AudioManager? = null
         @Volatile private var audioFocusRequest: android.media.AudioFocusRequest? = null
-        // True once we hold focus; guards against re-requesting every play tick.
+        // True once focus is held; guards against re-requesting every play tick.
         @Volatile private var hasAudioFocus = false
-        // We paused because of a TRANSIENT loss (nav prompt / notification) —
+        // Paused because of a TRANSIENT loss (nav prompt / notification) —
         // auto-resume when focus returns. A permanent loss (another music app,
         // a video app taking full focus) clears this: the user resumes manually.
         @Volatile private var resumeOnFocusGain = false
@@ -171,13 +211,19 @@ class NativePlayerManager(context: Context, private val channel: MethodChannel) 
         /// (e.g. Instagram taking transient focus per reel) means the user has moved
         /// on to another app.
         private const val TRANSIENT_RESUME_WINDOW_MS = 60_000L
+
+        /// When Auvy last stopped sounding (elapsedRealtime). `isMusicActive()`
+        /// counts Auvy's own output for a moment after it pauses, so "is another app
+        /// playing" is only answered once that has passed. See otherAppIsPlaying.
+        @Volatile private var lastStoppedAtMs = 0L
+        private const val OWN_AUDIO_SETTLE_MS = 800L
         // The volume Dart last asked for (fade-in ramp / user setting). Focus
-        // ducking drops to 0.2 then restores to THIS, so we never fight Dart's
+        // ducking drops to 0.2 then restores to THIS, so it never fights Dart's
         // volume state.
         @Volatile private var appVolume = 1.0f
 
         // Adaptive bitrate: the measurements Dart decides from
-        /// media3's throughput estimator. See where it is built for why we hold it.
+        /// media3's throughput estimator. See where it is built for why it is held.
         @Volatile private var bandwidthMeter:
             androidx.media3.exoplayer.upstream.DefaultBandwidthMeter? = null
 
@@ -224,12 +270,14 @@ class NativePlayerManager(context: Context, private val channel: MethodChannel) 
         private const val DEFAULT_UA =
             "com.google.android.youtube/20.10.38 (Linux; U; Android 14; en_US; Pixel 8 Pro Build/UD1A.231105.004) gzip"
 
-        // Live streaming resilience.
-        // The player is never handed a fixed URL. A ResolvingDataSource resolves the
-        // stream URL lazily, per byte range, from this expiry-keyed cache, and asks
-        // Dart to re-resolve when it expires, 403s or the network changes. A media3
-        // SimpleCache underneath stores bytes as they stream, so replays and
-        // re-buffers read from disk.
+        // Fetching YouTube audio.
+        // A song is fetched whole to a file before it plays (TrackFetcher, see
+        // fetchThenPlay). The fetch is never handed a fixed URL: a ResolvingDataSource
+        // resolves it lazily, per 512 KB range, from this expiry-keyed cache, and asks
+        // Dart to re-resolve when it expires, 403s or the network changes. A song that
+        // can't be fetched, or is too long to fetch first, streams through the same
+        // resolver over a media3 SimpleCache, so its replays and re-buffers read from
+        // disk.
         private const val CHUNK_LENGTH = 512L * 1024
 
         /// videoId → contentLength of the format currently BEING PLAYED.
@@ -264,11 +312,6 @@ class NativePlayerManager(context: Context, private val channel: MethodChannel) 
         /// cannot collide with media3's own keys.
         private const val META_FORMAT_CLEN = "auvy_format_clen"
 
-        // Pre-warm the next track's first bytes into the play-cache while the
-        // current track plays, so the transition starts INSTANTLY from cache
-        // (kills the ~2s resolve+buffer gap) — only ~1 MB, so a queue edit wastes
-        // almost nothing (vs a whole-track pre-download).
-        private const val PREWARM_BYTES = 1L * 1024 * 1024
 
         /// How many 403 retries reuse the SAME cached URL before escalating to a
         /// re-resolve. A URL with hours of validity left is not the reason a
@@ -282,16 +325,16 @@ class NativePlayerManager(context: Context, private val channel: MethodChannel) 
         /// different URLs are all refused then the URL is not the problem. See the
         /// give-up branch in getRetryDelayMsFor for the arithmetic.
         private const val MAX_403_ESCALATIONS = 3
-        @Volatile private var prewarmThread: Thread? = null
 
         // The videoId of the range currently being loaded, so the load-error
         // policy can drop the RIGHT cache entry on a 403 (forces a fresh resolve
         // on the retry). Single active track load at a time, so a field suffices.
         @Volatile private var currentResolveKey: String? = null
 
-        // media3 streaming play-cache (LRU). Singleton per process (SimpleCache
-        // refuses a second instance on the same dir). Only caches bytes actually
-        // streamed — NOT speculative pre-download.
+        // media3 play-cache (LRU) for what streams instead of being fetched first
+        // (a song that couldn't be fetched, a long one). Singleton per process
+        // (SimpleCache refuses a second instance on the same dir). Only caches bytes
+        // actually streamed, never a speculative download.
         @Volatile private var playerCache: SimpleCache? = null
         private const val PLAYER_CACHE_BYTES = 512L * 1024 * 1024  // 512 MB LRU
 
@@ -318,7 +361,7 @@ class NativePlayerManager(context: Context, private val channel: MethodChannel) 
         }
 
         /// Compute the URL's own expiry from its `expire=<epoch seconds>` param
-        /// (googlevideo). Falls back to +5 min when absent so we still re-resolve.
+        /// (googlevideo). Falls back to +5 min when absent so it is still re-resolved.
         private fun expiryFromUrl(url: String): Long {
             return try {
                 val exp = Uri.parse(url).getQueryParameter("expire")?.toLongOrNull()
@@ -484,6 +527,8 @@ class NativePlayerManager(context: Context, private val channel: MethodChannel) 
     }
 
     init {
+        latest = this
+        TrackFetcher.setUp(appContext)
         // Latest channel always wins (callbacks below route to it).
         activeChannel = channel
         installVolumeWatcher(appContext)
@@ -514,8 +559,9 @@ class NativePlayerManager(context: Context, private val channel: MethodChannel) 
             // handleAudioFocus=false: focus is requested and handled by the app (see
             // the audio focus listener), not by ExoPlayer. setHandleAudioBecomingNoisy
             // still pauses when headphones or Bluetooth disconnect.
-            // WAKE_MODE_NETWORK: hold a partial wake lock and Wi-Fi lock while playing
-            // remote streams, so the buffer keeps refilling with the screen off.
+            // WAKE_MODE_NETWORK: hold a partial wake lock and Wi-Fi lock while playing,
+            // so a stream keeps refilling and the next song's fetch (in the current one's
+            // last seconds) keeps its connection with the screen off.
             // An explicit bandwidth meter, so Dart can read the measured throughput when
             // choosing a quality at resolve time (a much better signal than "Wi-Fi or
             // mobile?"). One per process, so the estimate isn't re-learned per player.
@@ -590,11 +636,11 @@ class NativePlayerManager(context: Context, private val channel: MethodChannel) 
         })
         p.addListener(object : Player.Listener {
             // Playback just started (or resumed) → grab audio focus so OTHER
-            // media apps yield to us, and so we START getting focus-change
-            // callbacks (which is how we pause when THEY take over).
+            // media apps yield to Auvy, and so focus-change callbacks START
+            // arriving (which is how Auvy pauses when THEY take over).
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
                 // Log why playWhenReady changed (audio focus, headphones unplugged, remote
-                // control, or our own Dart code), so "it paused by itself" can be diagnosed.
+                // control, or Auvy's own Dart code), so "it paused by itself" can be diagnosed.
                 val why = when (reason) {
                     Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST -> "USER_REQUEST (someone called play/pause — including our own Dart)"
                     Player.PLAY_WHEN_READY_CHANGE_REASON_AUDIO_FOCUS_LOSS -> "AUDIO_FOCUS_LOSS (another app took the output)"
@@ -605,7 +651,7 @@ class NativePlayerManager(context: Context, private val channel: MethodChannel) 
                 }
                 android.util.Log.i("AuvyPlayer", "playWhenReady=$playWhenReady — $why")
                 // A pause the system made (output gone, remote) goes to the activity log
-                // too; our own calls and track ends are already visible there.
+                // too; Auvy's own calls and track ends are already visible there.
                 if (!playWhenReady &&
                     reason != Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST &&
                     reason != Player.PLAY_WHEN_READY_CHANGE_REASON_END_OF_MEDIA_ITEM) {
@@ -665,6 +711,13 @@ class NativePlayerManager(context: Context, private val channel: MethodChannel) 
             }
             override fun onPlayerError(error: PlaybackException) {
                 android.util.Log.e("AuvyPlayer", "onPlayerError code=${error.errorCodeName} msg=${error.message} playWhenReady=${p.playWhenReady}")
+                // A fetched file that can't be read (an I/O or parsing error) is
+                // deleted, so the heal Dart starts fetches the song again rather
+                // than replay the same file.
+                if (error.errorCode in 2000..3999 &&
+                    TrackFetcher.discardIfFetched(p.currentMediaItem?.localConfiguration?.uri)) {
+                    android.util.Log.w("AuvyPlayer", "fetched file of ${p.currentMediaItem?.mediaId} unreadable; deleted")
+                }
                 // Error recovery re-resolves over the network from Dart — keep
                 // the CPU/WiFi up so the retry can actually run with screen off.
                 holdTransitionLocks(appContext)
@@ -712,7 +765,11 @@ class NativePlayerManager(context: Context, private val channel: MethodChannel) 
                         "buffering" to (state == Player.STATE_BUFFERING),
                         "midTrack" to midTrack,
                     ))
-                if (state == Player.STATE_ENDED) {
+                if (state == Player.STATE_ENDED && awaitingVideo != null) {
+                    // The previous song ran out while the next one is being fetched: the
+                    // fetched song starts on its own, so this end moves nothing on.
+                    android.util.Log.i("AuvyPlayer", "previous song ended while $awaitingVideo is fetched; waiting for it")
+                } else if (state == Player.STATE_ENDED) {
                     // Bridge the Dart-driven advance (see companion docs) BEFORE
                     // notifying, so the device can't suspend under the resolve.
                     holdTransitionLocks(appContext)
@@ -726,6 +783,7 @@ class NativePlayerManager(context: Context, private val channel: MethodChannel) 
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 android.util.Log.i("AuvyPlayer", "isPlaying=$isPlaying playWhenReady=${p.playWhenReady} state=${p.playbackState}")
+                if (!isPlaying) lastStoppedAtMs = android.os.SystemClock.elapsedRealtime()
                 // Belt and braces: play/pause can arrive without a state change
                 // (e.g. resuming an already-READY item).
                 if (isPlaying) startPositionTicks()
@@ -838,12 +896,12 @@ class NativePlayerManager(context: Context, private val channel: MethodChannel) 
                 tickPosMs = posMs
                 tickAtMs = android.os.SystemClock.elapsedRealtime()
                 tickIndex = player.currentMediaItemIndex
+                if (dur != C.TIME_UNSET) latest?.prefetchIfDue(posMs, dur, player.isPlaying)
                 activeChannel?.invokeMethod(
                     "onPosition",
                     mapOf(
                         "positionMs" to posMs,
                         "durationMs" to (if (dur == C.TIME_UNSET) 0L else dur),
-                        "bufferedMs" to player.bufferedPosition,
                         "isPlaying" to player.isPlaying,
                         // Which song this tick is about (Dart drops a tick for a
                         // song it has already moved on from).
@@ -877,10 +935,10 @@ class NativePlayerManager(context: Context, private val channel: MethodChannel) 
 
     /// Puts the track back when its audio jumps ahead by itself.
     ///
-    /// Seen 2026-10-17: with the app in the background, Android
-    /// took the Opus decoder back ("Released by resource manager"), ExoPlayer made
-    /// a new one, and the first audio out of it was the track's last moment, so
-    /// "Golden" lost 102 of its 195 seconds and the queue moved on. The audio sink
+    /// With the app in the background, Android can take the Opus decoder back
+    /// ("Released by resource manager"); ExoPlayer makes a new one, and the first
+    /// audio out of it can be the track's last moment, so most of the song was
+    /// lost and the queue moved on. The audio sink
     /// reports a jump like that as an UnexpectedDiscontinuityException and carries
     /// on from the new time. A seek is an expected discontinuity, so this never
     /// fires for one.
@@ -962,9 +1020,9 @@ class NativePlayerManager(context: Context, private val channel: MethodChannel) 
                     // Permanent loss (another media app took full focus). Pause; the user
                     // resumes manually. Ignored during a call.
                     android.media.AudioManager.AUDIOFOCUS_LOSS -> {
-                        // Clear the flag first: after a permanent loss the system has dropped our
+                        // Clear the flag first: after a permanent loss the system has dropped Auvy's
                         // focus request, and a stale `true` would stop requestAudioFocusIfNeeded()
-                        // from asking again on the next play. Cleared even when we keep playing
+                        // from asking again on the next play. Cleared even when playback continues
                         // through a call.
                         hasAudioFocus = false
                         if (isPhoneCallActive()) return@post
@@ -995,9 +1053,9 @@ class NativePlayerManager(context: Context, private val channel: MethodChannel) 
                         p.volume = 0.2f
                     }
                     // Focus back: un-duck to the app's real volume, and resume
-                    // if we paused for a transient loss.
+                    // if it was paused for a transient loss.
                     android.media.AudioManager.AUDIOFOCUS_GAIN -> {
-                        // Focus is genuinely ours again — record that, so a later
+                        // Focus is genuinely Auvy's again — record that, so a later
                         // play doesn't waste a redundant request, and so the flag
                         // can never drift from reality in the other direction.
                         hasAudioFocus = true
@@ -1009,7 +1067,7 @@ class NativePlayerManager(context: Context, private val channel: MethodChannel) 
                             // Only resume if both hold:
                             //  • The loss was short (TRANSIENT_RESUME_WINDOW_MS); a call is exempt,
                             //    since people expect music back after a call.
-                            //  • Nothing else is audible. We're paused, so isMusicActive() can only mean
+                            //  • Nothing else is audible. Auvy is paused, so isMusicActive() can only mean
                             //    another app is playing, and starting over it would be wrong.
                             if (shouldResumeOnFocusGain()) {
                                 p.play()
@@ -1021,7 +1079,7 @@ class NativePlayerManager(context: Context, private val channel: MethodChannel) 
                     // Any other code: Android can also send GAIN_TRANSIENT and
                     // GAIN_TRANSIENT_EXCLUSIVE, and future codes land here too. A negative code is
                     // always a loss, so treat it as transient (pause, remember to resume); a
-                    // positive one is a gain, so restore volume and resume if we paused.
+                    // positive one is a gain, so restore volume and resume if it was paused.
                     else -> {
                         if (change < 0) {
                             resumeOnFocusGain = p.playWhenReady
@@ -1120,7 +1178,7 @@ class NativePlayerManager(context: Context, private val channel: MethodChannel) 
                         // for every normal user-initiated play.
                         val autoPlay = call.argument<Boolean>("autoPlay") ?: true
                         // A fully-downloaded local file (from Dart's cache). When
-                        // present we play it directly: instant start, no stalls,
+                        // present it is played directly: instant start, no stalls,
                         // instant seeking — no network at all.
                         val localPath = call.argument<String>("localPath")
                         val videoId = call.argument<String>("videoId") ?: ""
@@ -1130,6 +1188,10 @@ class NativePlayerManager(context: Context, private val channel: MethodChannel) 
                             // Already fully on disk (Auvy's explicit-download cache) —
                             // play it directly: instant, no network, instant seeking.
                             android.util.Log.i("AuvyPlayer", "playing LOCAL cached file ($videoId)")
+                            playGeneration++
+                            awaitingVideo = null
+                            upcomingWanted = null
+                            upcomingToFetch = null
                             // Carry the id: once a local track can be the gapless
                             // upcoming, the item playing before it must be
                             // identifiable too, or the transition window is
@@ -1137,6 +1199,9 @@ class NativePlayerManager(context: Context, private val channel: MethodChannel) 
                             player.setMediaSource(localFileSource(localFile, videoId))
                             player.playWhenReady = autoPlay
                             player.prepare()
+                            // Its whole file is here, as for a fetched song (Dart reads its
+                            // waveform then).
+                            activeChannel?.invokeMethod("onFetched", mapOf("videoId" to videoId))
                             result.success(null)
                         } else if (videoId.isNotEmpty() && !videoId.startsWith("http")) {
                             // YouTube track: a lazily resolving, cached source keyed by videoId (see
@@ -1148,14 +1213,15 @@ class NativePlayerManager(context: Context, private val channel: MethodChannel) 
                                 seedUrl(videoId, url, userAgent, contentLength,
                                     freshStart = true)
                             }
-                            android.util.Log.i("AuvyPlayer", "playing RESOLVING stream ($videoId)")
-                            player.setMediaSource(buildResolvingSource(videoId))
-                            player.playWhenReady = autoPlay
-                            player.prepare()
+                            fetchThenPlay(videoId, autoPlay)
                             result.success(null)
                         } else if (url != null) {
                             // RADIO / direct stream (m3u8 / icecast) — a real playable URL,
                             // nothing to resolve. Play it directly.
+                            playGeneration++
+                            awaitingVideo = null
+                            upcomingWanted = null
+                            upcomingToFetch = null
                             player.setMediaSource(buildSource(url, userAgent, contentLength))
                             player.playWhenReady = autoPlay
                             player.prepare()
@@ -1169,14 +1235,21 @@ class NativePlayerManager(context: Context, private val channel: MethodChannel) 
                         val u = call.argument<String>("url") ?: ""
                         val ua = call.argument<String>("userAgent") ?: DEFAULT_UA
                         val clen = (call.argument<Any>("contentLength") as? Number)?.toLong() ?: 0L
-                        prewarmNext(vid, u, ua, clen)
+                        // Gapless off: fetched whole near the end like any next song
+                        // (prefetchIfDue), and played from its file when Dart moves on.
+                        if (vid.isNotEmpty() && !vid.startsWith("http") && !(vid == upcomingWanted && !upcomingGapless)) {
+                            if (u.isNotEmpty()) seedUrl(vid, u, ua, clen, freshStart = true)
+                            upcomingWanted = vid
+                            upcomingGapless = false
+                            upcomingToFetch = if (TrackFetcher.fileFor(vid) == null) vid else null
+                        }
                         result.success(null)
                     }
                     "setUpcoming" -> {
                         // GAPLESS: queue the (already audio-conformed) next track as a
-                        // 2nd media item so ExoPlayer pre-buffers it and transitions
-                        // with ZERO gap. Dart calls this ONLY when the gapless setting
-                        // is on; otherwise the single-track + prewarmNext path is used.
+                        // 2nd media item, from its file, so ExoPlayer transitions with
+                        // ZERO gap. Dart calls this ONLY when the gapless setting is on;
+                        // otherwise prewarmNext (fetched ahead, Dart advances).
                         val vid = call.argument<String>("videoId") ?: ""
                         val u = call.argument<String>("url") ?: ""
                         val ua = call.argument<String>("userAgent") ?: DEFAULT_UA
@@ -1193,7 +1266,13 @@ class NativePlayerManager(context: Context, private val channel: MethodChannel) 
                             val nextIdx = player.currentMediaItemIndex + 1
                             val curNextId = if (player.mediaItemCount > nextIdx)
                                 player.getMediaItemAt(nextIdx).mediaId else null
-                            if (curNextId != vid) {
+                            // Asked again while it is being fetched ahead: that fetch queues it.
+                            val fetchingAhead = vid == upcomingWanted && upcomingGapless &&
+                                (upcomingToFetch == vid || TrackFetcher.isFetching(vid))
+                            if (curNextId != vid && !fetchingAhead) {
+                                upcomingWanted = vid
+                                upcomingGapless = true
+                                upcomingToFetch = null
                                 // Drop any stale upcoming, then append THIS one.
                                 while (player.mediaItemCount > nextIdx)
                                     player.removeMediaItem(player.mediaItemCount - 1)
@@ -1201,14 +1280,23 @@ class NativePlayerManager(context: Context, private val channel: MethodChannel) 
                                 if (localFile != null && localFile.exists() && localFile.length() > 0) {
                                     player.addMediaSource(localFileSource(localFile, vid))
                                     android.util.Log.i("AuvyPlayer", "setUpcoming ($vid) — gapless next queued from LOCAL file")
+                                    activeChannel?.invokeMethod("onFetched", mapOf("videoId" to vid))
                                 } else {
-                                    // Seed the gapless upcoming through seedUrl too, so its format pin is set.
-                                    // freshStart: this format is the one that will play.
+                                    // Seed the URL so its format pin is set (freshStart: this
+                                    // format is the one that will play). The song is fetched whole
+                                    // in the current one's last seconds (prefetchIfDue) and queued
+                                    // from its file then, so the change is still gapless.
                                     if (u.isNotEmpty()) {
                                         seedUrl(vid, u, ua, clen, freshStart = true)
                                     }
-                                    player.addMediaSource(buildResolvingSource(vid))
-                                    android.util.Log.i("AuvyPlayer", "setUpcoming ($vid) — gapless next queued")
+                                    val ready = TrackFetcher.take(vid)
+                                    if (ready != null) {
+                                        player.addMediaSource(localFileSource(ready, vid))
+                                        android.util.Log.i("AuvyPlayer", "setUpcoming ($vid) — gapless next queued from its fetched file")
+                                    } else {
+                                        upcomingToFetch = vid
+                                        android.util.Log.i("AuvyPlayer", "setUpcoming ($vid) — fetched whole near the end, then queued")
+                                    }
                                 }
                             }
                         }
@@ -1242,6 +1330,8 @@ class NativePlayerManager(context: Context, private val channel: MethodChannel) 
                         val nextIdx = player.currentMediaItemIndex + 1
                         while (player.mediaItemCount > nextIdx)
                             player.removeMediaItem(player.mediaItemCount - 1)
+                        upcomingWanted = null
+                        upcomingToFetch = null
                         result.success(null)
                     }
                     // Hands Dart the network bytes counted by AudioTrafficCounter since the last
@@ -1259,17 +1349,40 @@ class NativePlayerManager(context: Context, private val channel: MethodChannel) 
                         result.success(null)
                     }
                     "promoteFromPlayCache" -> {
-                        // "Save from stream": if the WHOLE track is already in the media3 play-cache,
-                        // copy those bytes into a file for the Cached/Downloads folder with no
-                        // network use. Returns {promoted:true, bytes} only when the full track is
-                        // cached from byte 0; otherwise {promoted:false, reason} so Dart can fall back
-                        // to an HTTP download (explicit downloads) or skip it.
+                        // Keep what was played: copy the track's whole fetched file (TrackFetcher),
+                        // or a streamed track's bytes if the media3 play-cache holds all of it, into a
+                        // file for the Cached/Downloads folder with no network use. Returns
+                        // {promoted:true, bytes} only for a whole track; otherwise
+                        // {promoted:false, reason} so Dart can fall back to an HTTP download (explicit
+                        // downloads) or skip it.
                         val vid = call.argument<String>("videoId") ?: ""
                         val targetPath = call.argument<String>("targetPath") ?: ""
                         val declaredLen = (call.argument<Any>("contentLength") as? Number)?.toLong() ?: 0L
                         val mainH = android.os.Handler(android.os.Looper.getMainLooper())
+                        val fetched = if (vid.isEmpty()) null else TrackFetcher.fileFor(vid)
                         if (vid.isEmpty() || targetPath.isEmpty() || vid.startsWith("http")) {
                             result.success(mapOf("promoted" to false, "reason" to "invalid"))
+                        } else if (fetched != null) {
+                            // The song was fetched whole to play (TrackFetcher): copy that file,
+                            // as iOS does.
+                            Thread {
+                                try {
+                                    val target = File(targetPath)
+                                    fetched.copyTo(target, overwrite = true)
+                                    if (declaredLen > 0 && target.length() != declaredLen) {
+                                        target.delete()
+                                        android.util.Log.w("AuvyPlayer",
+                                            "promote $vid: fetched file is ${target.length()} of $declaredLen bytes; discarded")
+                                        mainH.post { result.success(mapOf("promoted" to false, "reason" to "short-write")) }
+                                    } else {
+                                        android.util.Log.i("AuvyPlayer", "promote $vid from its fetched file → ${target.length()} bytes (0 network)")
+                                        mainH.post { result.success(mapOf("promoted" to true, "bytes" to target.length())) }
+                                    }
+                                } catch (e: Exception) {
+                                    try { File(targetPath).delete() } catch (_: Exception) {}
+                                    mainH.post { result.success(mapOf("promoted" to false, "reason" to (e.message ?: "error"))) }
+                                }
+                            }.apply { isDaemon = true }.start()
                         } else {
                             Thread {
                                 try {
@@ -1327,13 +1440,40 @@ class NativePlayerManager(context: Context, private val channel: MethodChannel) 
                     // Auvy doesn't restart itself after the user chose to stop.
                     "pause" -> {
                         resumeOnFocusGain = false
+                        awaitingPlay = false
                         player.pause(); releaseTransitionLocks(); result.success(null)
                     }
-                    "resume" -> { player.play(); result.success(null) }
-                    "stop" -> { player.stop(); releaseTransitionLocks(); abandonAudioFocusInternal(); result.success(null) }
+                    "resume" -> {
+                        if (awaitingVideo != null) {
+                            // For the song still being fetched: it starts playing once its
+                            // file is in; playing now would restart the previous song.
+                            awaitingPlay = true
+                        } else {
+                            player.play()
+                        }
+                        result.success(null)
+                    }
+                    "stop" -> {
+                        playGeneration++
+                        // A player with nothing loaded stays IDLE, so no state change
+                        // would end the "loading" a fetch started.
+                        if (awaitingVideo != null) {
+                            activeChannel?.invokeMethod("onBuffering", mapOf("buffering" to false, "midTrack" to false))
+                        }
+                        awaitingVideo = null
+                        upcomingWanted = null
+                        upcomingToFetch = null
+                        player.stop(); releaseTransitionLocks(); abandonAudioFocusInternal(); result.success(null)
+                    }
                     "seek" -> {
                         val pos = call.argument<Int>("positionMs") ?: 0
-                        player.seekTo(pos.toLong())
+                        if (awaitingVideo != null) {
+                            // For the song still being fetched (applied when its file is in).
+                            heldStartMs = pos.toLong()
+                            android.util.Log.i("AuvyPlayer", "seek ${pos}ms held until the song is fetched")
+                        } else {
+                            player.seekTo(pos.toLong())
+                        }
                         result.success(null)
                     }
                     "setVolume" -> {
@@ -1516,7 +1656,7 @@ class NativePlayerManager(context: Context, private val channel: MethodChannel) 
                     }
                     // Throughput and stalls since the last read, for the Dart-side bitrate
                     // ladder. The stall count is read-and-clear, since the ladder asks "has
-                    // anything gone wrong since I last decided?".
+                    // anything gone wrong since the last decision?".
                     "getNetworkStats" -> {
                         val stalls = stallCount
                         stallCount = 0
@@ -1557,6 +1697,47 @@ class NativePlayerManager(context: Context, private val channel: MethodChannel) 
                     "getLevel" -> {
                         result.success(if (player.isPlaying) levelMeter.level.toDouble() else 0.0)
                     }
+                    "waveform" -> {
+                        // The playing song's real waveform (WaveformDecoder), named by its
+                        // video id so Dart can drop an answer that arrives after the song
+                        // changed. Songs play from a whole fetched file (see
+                        // fetchThenPlay), as on iOS, so the asked-for song is read from
+                        // its fetched file, or the file queued for it as the gapless next,
+                        // even before it plays (Dart asks when it hears onFetched). Until
+                        // a file is in, or for a stream that isn't one, the answer is null.
+                        val buckets = call.argument<Int>("buckets") ?: 400
+                        val item = player.currentMediaItem
+                        val playingUri = item?.localConfiguration?.uri
+                            ?.takeIf { it.scheme == "file" || it.scheme == "content" }
+                        val wanted = call.argument<String>("videoId")
+                        val target: Pair<String, Uri>? = when {
+                            item != null && playingUri != null && (wanted.isNullOrEmpty() || wanted == item.mediaId) ->
+                                item.mediaId to playingUri
+                            !wanted.isNullOrEmpty() ->
+                                (TrackFetcher.fileFor(wanted)?.let { Uri.fromFile(it) } ?: queuedFileUri(wanted))
+                                    ?.let { wanted to it }
+                            else -> null
+                        }
+                        if (target == null) {
+                            result.success(null)
+                        } else {
+                            val (videoId, uri) = target
+                            val request = waveformRequest.incrementAndGet()
+                            waveformExecutor.execute {
+                                // Skipping through songs queues requests; only the newest is decoded.
+                                val began = android.os.SystemClock.elapsedRealtime()
+                                val peaks = WaveformDecoder.decode(appContext, uri, buckets) {
+                                    waveformRequest.get() != request
+                                }
+                                android.util.Log.i("AuvyPlayer", "waveform: $videoId " +
+                                    (if (peaks != null) "decoded" else "not decoded") +
+                                    " in ${android.os.SystemClock.elapsedRealtime() - began} ms")
+                                mainHandler.post {
+                                    result.success(peaks?.let { mapOf("videoId" to videoId, "peaks" to it.toList()) })
+                                }
+                            }
+                        }
+                    }
                     "setEqualizer" -> {
                         eqEnabled = call.argument<Boolean>("enabled") ?: false
                         val bands = call.argument<List<Double>>("bands")
@@ -1578,13 +1759,24 @@ class NativePlayerManager(context: Context, private val channel: MethodChannel) 
                     // sends PLAY over both links, so pressing play for a PC can also start Auvy
                     // on the phone (and Android 11+ media resumption may even restart the app to
                     // deliver it). `AudioManager.isMusicActive()` is device-wide and
-                    // permission-free: if music is already playing and it isn't us, the PLAY
-                    // wasn't for us.
+                    // permission-free: if music is already playing and it isn't Auvy, the PLAY
+                    // wasn't meant for Auvy.
                     "isMusicActive" -> {
                         val am = audioManager
                             ?: (appContext.getSystemService(Context.AUDIO_SERVICE)
                                     as android.media.AudioManager).also { audioManager = it }
                         result.success(am.isMusicActive)
+                    }
+                    // Another app is audible right now. False while Auvy plays (the
+                    // reading would include itself) and for OWN_AUDIO_SETTLE_MS after it
+                    // stops, while its own output can still count as music.
+                    "otherAppIsPlaying" -> {
+                        val am = audioManager
+                            ?: (appContext.getSystemService(Context.AUDIO_SERVICE)
+                                    as android.media.AudioManager).also { audioManager = it }
+                        val quietFor = android.os.SystemClock.elapsedRealtime() - lastStoppedAtMs
+                        val auvySilent = sharedPlayer?.isPlaying != true && quietFor > OWN_AUDIO_SETTLE_MS
+                        result.success(auvySilent && am.isMusicActive)
                     }
                     else -> result.notImplemented()
                 }
@@ -1712,8 +1904,8 @@ class NativePlayerManager(context: Context, private val channel: MethodChannel) 
     /// refuse it splices two encodings into one stream.
     ///
     /// Auvy records the format's length under its own metadata key rather than
-    /// trusting media3's KEY_CONTENT_LENGTH (the 1 MB prewarm request might be
-    /// recorded as the length). Its own key also survives restarts, which
+    /// trusting media3's KEY_CONTENT_LENGTH (a bounded request's length might be
+    /// recorded as the song's). Its own key also survives restarts, which
     /// matters because the wrong-format bytes usually come from an earlier session.
     private fun reconcileCacheFormat(videoId: String, contentLength: Long) {
         if (contentLength <= 0L) return
@@ -1804,8 +1996,8 @@ class NativePlayerManager(context: Context, private val channel: MethodChannel) 
         // is recorded only when absent (freshStart = false) because this is a
         // mid-track resolve.
         //
-        // Returns the STORED entry, not `resolved`: priming marks the cached instance,
-        // and a detached copy would lose that flag and re-prime on every chunk.
+        // Returns the STORED entry, not `resolved`: seedUrl fills in the length from
+        // the URL's `clen` when Dart sent none, and the fetch checks against it.
         return seedUrl(
             videoId, resolved.url, resolved.userAgent, resolved.contentLength,
             freshStart = false,
@@ -1845,7 +2037,7 @@ class NativePlayerManager(context: Context, private val channel: MethodChannel) 
                     android.util.Log.w(
                         "AuvyPlayer", "403 PROBE unavailable: ${e.javaClass.simpleName}")
                 }
-                // Is the URL we're holding actually stale? A 403 doesn't imply an expired
+                // Is the URL being held actually stale? A 403 doesn't imply an expired
                 // URL, and throwing away a still-valid URL means each retry gets a fresh one
                 // that has never served bytes, which googlevideo can refuse for a mid-file
                 // range. So retry the SAME URL first, and only re-resolve once same-URL
@@ -2022,63 +2214,145 @@ class NativePlayerManager(context: Context, private val channel: MethodChannel) 
         }
     }
 
-    // Pre-warm the next track: seed its URL + pull its first ~1 MB into the
-    // play-cache on a background thread, so when the queue advances to it the
-    // resolving source serves the opening bytes from cache immediately (no
-    // resolve, no network round-trip) — a near-instant transition.
-    private fun prewarmNext(videoId: String, url: String, userAgent: String, contentLength: Long) {
-        if (videoId.isEmpty() || url.isEmpty() || videoId.startsWith("http")) return
-        // Stop the previous prewarm FIRST. The seed below may drop this key's cached
-        // spans (reconcileCacheFormat), and doing that while an earlier CacheWriter
-        // is still writing the same key is the one way that purge could race a live
-        // writer instead of merely being skipped.
-        prewarmThread?.interrupt()
-        // freshStart: this is the format the track is about to play, so it REPLACES
-        // any pin left over from a previous play of it.
-        seedUrl(videoId, url, userAgent, contentLength, freshStart = true)
-        val t = Thread {
-            try {
-                val cache = getPlayerCache(appContext)
-                if (cache.isCached(videoId, 0, PREWARM_BYTES)) return@Thread
-                val cacheFactory = CacheDataSource.Factory()
-                    .setCache(cache)
-                    .setUpstreamDataSourceFactory(
-                        DefaultHttpDataSource.Factory()
-                            .setAllowCrossProtocolRedirects(true)
-                            .setConnectTimeoutMs(15000)
-                            .setReadTimeoutMs(15000)
-                            .setDefaultRequestProperties(
-                                mapOf("Connection" to "keep-alive", "User-Agent" to userAgent)
-                            )
-                            // The pre-warm pull is real data — roughly a
-                            // megabyte per upcoming track, spent whether or not
-                            // the listener ever reaches it.
-                            .setTransferListener(AudioTrafficCounter),
-                    )
-                    .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
-                val spec = DataSpec.Builder()
-                    .setUri(Uri.parse(url))
-                    .setKey(videoId)
-                    .setPosition(0)
-                    .setLength(PREWARM_BYTES)
-                    .build()
-                androidx.media3.datasource.cache.CacheWriter(
-                    cacheFactory.createDataSource(), spec, null, null,
-                ).cache()
-                android.util.Log.i("AuvyPlayer", "prewarmed next $videoId (~${PREWARM_BYTES / 1024}KB)")
-            } catch (_: InterruptedException) {
-            } catch (e: Exception) {
-                android.util.Log.w("AuvyPlayer", "prewarm failed for $videoId: ${e.message}")
+    /**
+     * Fetches the song whole (TrackFetcher), then plays the file, as the iOS player
+     * does (fetchThenPlay there). Until the file is in, the player keeps the
+     * previous song (see awaitingVideo). A song that can't be fetched, or is too
+     * long to fetch first (TrackFetcher), streams the way songs used to.
+     */
+    private fun fetchThenPlay(videoId: String, autoPlay: Boolean) {
+        val generation = ++playGeneration
+        awaitingPlay = autoPlay
+        heldStartMs = 0L
+        val ready = TrackFetcher.take(videoId)
+        if (ready != null || TrackFetcher.isLong(videoId)) {
+            awaitingVideo = null
+            upcomingWanted = null
+            upcomingToFetch = null
+            if (ready != null) {
+                android.util.Log.i("AuvyPlayer", "playVideo $videoId: fetched already, starting from disk")
+                startSong(localFileSource(ready, videoId), autoPlay, 0L)
+                activeChannel?.invokeMethod("onFetched", mapOf("videoId" to videoId))
+            } else {
+                android.util.Log.i("AuvyPlayer", "playVideo $videoId: too long to fetch first; streaming it")
+                startSong(buildResolvingSource(videoId), autoPlay, 0L)
+            }
+            return
+        }
+        // Named before the upcoming is forgotten: a fetch ahead of this very song
+        // is wanted all along, so it isn't stopped and started again.
+        awaitingVideo = videoId
+        upcomingWanted = null
+        upcomingToFetch = null
+        android.util.Log.i("AuvyPlayer", "playVideo $videoId: fetching the whole song, then playing the file")
+        activeChannel?.invokeMethod("onBuffering", mapOf("buffering" to true, "midTrack" to false))
+        // A paused player holds no wake lock, and the screen may be off (a skip from
+        // the notification or the car): kept awake until the song is READY.
+        holdTransitionLocks(appContext)
+        TrackFetcher.fetch(videoId, ::createFetchDataSource, { fetchLength(videoId) },
+            { songUrlCache.remove(videoId) }, mainHandler, { awaitingVideo == videoId }) { file ->
+            if (generation != playGeneration) return@fetch
+            awaitingVideo = null
+            val held = heldStartMs
+            heldStartMs = 0L
+            if (file != null) {
+                startSong(localFileSource(file, videoId), awaitingPlay, held)
+                activeChannel?.invokeMethod("onFetched", mapOf("videoId" to videoId))
+            } else {
+                android.util.Log.w("AuvyPlayer", "playVideo $videoId: " +
+                    (if (TrackFetcher.isLong(videoId)) "too long to fetch first" else "fetch failed") + ", streaming it instead")
+                startSong(buildResolvingSource(videoId), awaitingPlay, held)
             }
         }
-        t.isDaemon = true
-        prewarmThread = t
-        t.start()
     }
 
-    // A YouTube track as a lazily-resolving, cached, self-healing source. The
-    // MediaItem URI is just the videoId placeholder — the ResolvingDataSource
-    // swaps in the real URL per chunk; customCacheKey keys the play-cache.
+    private fun startSong(source: MediaSource, autoPlay: Boolean, startMs: Long) {
+        player.setMediaSource(source)
+        if (startMs > 0) player.seekTo(startMs)
+        player.playWhenReady = autoPlay
+        player.prepare()
+    }
+
+    /**
+     * In the playing song's last [PREFETCH_LEAD_MS], fetches the next song whole
+     * (the iOS player's prefetchIfDue): queued from its file for a gapless change,
+     * or kept for when Dart moves on. Dart hears onFetched, so a waveform slider on
+     * screen can have the song's waveform ready before it starts.
+     */
+    fun prefetchIfDue(positionMs: Long, durationMs: Long, playing: Boolean) {
+        val next = upcomingToFetch ?: return
+        if (!playing || durationMs <= 0 || durationMs - positionMs > PREFETCH_LEAD_MS) return
+        upcomingToFetch = null
+        android.util.Log.i("AuvyPlayer", "prefetch: fetching $next whole before its turn")
+        TrackFetcher.fetch(next, ::createFetchDataSource, { fetchLength(next) },
+            { songUrlCache.remove(next) }, mainHandler, { upcomingWanted == next }) { file ->
+            if (upcomingWanted != next) return@fetch
+            if (file == null) {
+                android.util.Log.w("AuvyPlayer", "prefetch: $next failed; it is fetched when it plays")
+                return@fetch
+            }
+            android.util.Log.i("AuvyPlayer", "prefetch: $next on disk before its turn")
+            if (upcomingGapless) {
+                val nextIdx = player.currentMediaItemIndex + 1
+                if (player.mediaItemCount == nextIdx) {
+                    player.addMediaSource(localFileSource(file, next))
+                }
+            }
+            activeChannel?.invokeMethod("onFetched", mapOf("videoId" to next))
+        }
+    }
+
+    /** The file of the item queued in the player for [videoId] (a gapless next song), or null. */
+    private fun queuedFileUri(videoId: String): Uri? = (0 until player.mediaItemCount)
+        .map { player.getMediaItemAt(it) }
+        .firstOrNull { it.mediaId == videoId }
+        ?.localConfiguration?.uri
+        ?.takeIf { it.scheme == "file" || it.scheme == "content" }
+
+    /**
+     * The length of the format a fetch is reading: the URL just resolved names it
+     * (seedUrl records `clen`), else the format pinned for the song; 0 if neither
+     * knows. TrackFetcher checks the file against it, and starts over if a
+     * refreshed URL is another format. Not the play-cache's record: that can be
+     * another format's, cached under the same key by an earlier stream.
+     */
+    private fun fetchLength(videoId: String): Long =
+        songUrlCache[videoId]?.contentLength?.takeIf { it > 0 }
+            ?: inUseContentLength[videoId]?.takeIf { it > 0 } ?: 0L
+
+    /**
+     * The player's resolving source without the play-cache, for TrackFetcher:
+     * bounded requests, the URL refreshed through Dart, the ranges joined.
+     */
+    private fun createFetchDataSource(): DataSource {
+        val http = DefaultHttpDataSource.Factory()
+            .setAllowCrossProtocolRedirects(true)
+            .setConnectTimeoutMs(15000)
+            .setReadTimeoutMs(15000)
+            .setDefaultRequestProperties(mapOf("Connection" to "keep-alive"))
+            .setTransferListener(AudioTrafficCounter)
+        val resolving = ResolvingDataSource.Factory(http) { dataSpec ->
+            val key = dataSpec.key ?: return@Factory dataSpec
+            val entry = resolveUrlBlocking(key)
+                ?: throw java.io.IOException("No stream URL for $key (resolve failed)")
+            dataSpec
+                .withUri(Uri.parse(entry.url))
+                .subrange(dataSpec.uriPositionOffset, CHUNK_LENGTH)
+                .withAdditionalHeaders(mapOf("User-Agent" to entry.userAgent))
+        }
+        val source = ContinuousDataSource(resolving.createDataSource()) { key ->
+            inUseContentLength[key] ?: songUrlCache[key]?.contentLength ?: 0L
+        }
+        // The fetch feeds the same throughput estimate the quality choice reads.
+        bandwidthMeter?.transferListener?.let { source.addTransferListener(it) }
+        return source
+    }
+
+    // A YouTube track streamed rather than fetched first (the fetch failed, or it
+    // is too long; see fetchThenPlay): a lazily-resolving, cached, self-healing
+    // source. The MediaItem URI is just the videoId placeholder: the
+    // ResolvingDataSource swaps in the real URL per chunk; customCacheKey keys the
+    // play-cache.
     private fun buildResolvingSource(videoId: String): MediaSource {
         val mediaItem = MediaItem.Builder()
             .setMediaId(videoId)

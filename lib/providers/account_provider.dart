@@ -88,8 +88,8 @@ Completer<String>? _firstVerdict;
 
 /// The launch's verdict, waiting a bounded time for one to arrive.
 ///
-/// Null on timeout, which keeps the offline meaning intact: we asked and were
-/// never told, so the 14-day grace applies rather than a lockout.
+/// Null on timeout, which keeps the offline meaning intact: the question was asked
+/// and never answered, so the 14-day grace applies rather than a lockout.
 Future<String?> _awaitFirstVerdict(Duration timeout) async {
   final known = _lastSeenGateStatus;
   if (known != null) return known;
@@ -517,7 +517,7 @@ class AccountNotifier extends StateNotifier<AccountState> {
               d['os']?.toString(),
             );
             // Self-repair: If this device is "isMe", and the server has a generic
-            // or unknown device label, use our local resolved marketing model.
+            // or unknown device label, use the locally resolved marketing model.
             if (isMe &&
                 (formattedModel == 'Unknown device' ||
                  formattedModel == 'Apple device' ||
@@ -832,8 +832,8 @@ class AccountNotifier extends StateNotifier<AccountState> {
       }
       if (status == 'approved' && body['probe'] != true) {
         // Approved without the probe marker is not an answer this path asked
-        // for. Fail to the full flow rather than trusting a shape we do not
-        // recognise.
+        // for. Fail to the full flow rather than trusting a shape that is not
+        // recognised.
         _probeSupported = false;
         logEvent('gate: unrecognised probe reply — falling back');
         return null;
@@ -875,8 +875,8 @@ class AccountNotifier extends StateNotifier<AccountState> {
   /// `unavailable` doesn't mean denied: playback uses the user's own YouTube session
   /// with no server in the path, so a Worker outage only turns cloud backup off.
   ///
-  /// [force] skips this launch's cached verdict and asks the Worker; the gate's "have
-  /// I been approved yet?" re-check needs a fresh answer.
+  /// [force] skips this launch's cached verdict and asks the Worker; the gate's
+  /// "approved yet?" re-check needs a fresh answer.
   Future<({String status, String? identity, String? detail})> verifyAccess(
       {bool force = false}) async {
     if (_c1WorkerUrl.isEmpty) {
@@ -1053,7 +1053,7 @@ class AccountNotifier extends StateNotifier<AccountState> {
       try {
         await previous;
       } catch (_) {
-        // A failed attempt is still a finished one; ours proceeds regardless.
+        // A failed attempt is still a finished one; this one proceeds regardless.
       }
     }
     return _enableCloudBackup(interactive: interactive);
@@ -1259,8 +1259,8 @@ class AccountNotifier extends StateNotifier<AccountState> {
         await _ensureLocalDataBelongsTo(uid, sessionTag: _cookieTag(cookie));
         // Timed on THIS path, not just the anonymous fallback. The fallback's
         // timer never printed a line, because it only runs when no worker URL is
-        // configured, so the slowest phase of the login the user complained about
-        // was the one phase with no measurement on it.
+        // configured, so the slowest phase of a slow login was the one
+        // phase with no measurement on it.
         final restoreStarted = DateTime.now();
         final restored = await CloudSyncService.instance.activateAndRestore(uid);
         logEvent('cloud: activateAndRestore took '
@@ -1361,8 +1361,8 @@ class AccountNotifier extends StateNotifier<AccountState> {
   /// True when the last activation failed because the service could not be
   /// REACHED, rather than because this account has nothing stored.
   ///
-  /// The difference decides whether "no local data" means "you are new" or "we
-  /// don't know yet", and only the first of those may trigger onboarding.
+  /// The difference decides whether "no local data" means "you are new" or "not
+  /// known yet", and only the first of those may trigger onboarding.
   bool cloudActivationUnreachable = false;
 
   /// Is [e] a "try again" failure rather than a definite answer?
@@ -1384,7 +1384,7 @@ class AccountNotifier extends StateNotifier<AccountState> {
     'intel_',
     'auvy_lib::',
     // The sync records of what this phone last pushed and which backup parts it
-    // holds, per account. Left behind (they were until 2026-10-17), a sign-out
+    // holds, per account. Left behind (as they used to be), a sign-out
     // and sign-in had the emptied phone believe it still held the old library:
     // the restore took the emptied sections as current, and the next push sent
     // the emptiness up over the backup.
@@ -1886,7 +1886,7 @@ class AccountNotifier extends StateNotifier<AccountState> {
     try {
       // Re-read, not rebuilt: a rebuilt notifier re-subscribes to the platform,
       // which reports "no network" for a moment (a fake offline blip after
-      // every restore, seen on iOS).
+      // every restore).
       await _ref.read(connectivityProvider.notifier).reloadFromStorage();
     } catch (_) {}
     try {
@@ -2030,7 +2030,7 @@ class AccountNotifier extends StateNotifier<AccountState> {
   }
 
   // Sentinel access token for sessions established via WebView cookies (not the
-  // Google Sign-In OAuth flow), so we can tell the two apart.
+  // Google Sign-In OAuth flow), so the two can be told apart.
   static const String _cookieSessionToken = 'cookie_session';
 
   Future<void> _saveAccount() async {
@@ -2467,7 +2467,7 @@ class AccountNotifier extends StateNotifier<AccountState> {
         // Held: another device pushed since this one last synced, so that push
         // sent nothing. Merge its copy in (the merge keeps this device's own
         // unpushed edits) and push again. The wipe used to follow straight away,
-        // while the catch-up the hold starts was still running (seen 2026-10-17),
+        // while the catch-up the hold starts was still running,
         // so edits not yet backed up would have gone with it.
         // Bounded, since a sign-out must not hang.
         if (CloudSyncService.instance.needsRemoteMerge) {
@@ -2648,7 +2648,7 @@ class AccountNotifier extends StateNotifier<AccountState> {
     return restored;
   }
 
-  /// Delete account: removes the user's Auvy data from our backend (the Firestore
+  /// Delete account: removes the user's Auvy data from Auvy's backend (the Firestore
   /// backup) and from the device, then resets the app to a new-user state. It
   /// doesn't touch the Google/YouTube account itself. Signing in again with the same
   /// account starts fresh. The caller navigates to a fresh start (SplashScreen)

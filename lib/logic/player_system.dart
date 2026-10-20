@@ -137,6 +137,9 @@ extension PlayerSystemController on PlayerNotifier {
           // session stay fully interactive while the process lives.
           androidStopForegroundOnPause: true,
           androidNotificationClickStartsActivity: true,
+          // Android Auto shows a search button for Auvy (answered by
+          // AuvyAudioHandler.search).
+          androidBrowsableRootExtras: {'android.media.browse.SEARCH_SUPPORTED': true},
         ),
       );
       print('OK: Media controls initialised (Native Bridge)');
@@ -149,6 +152,15 @@ extension PlayerSystemController on PlayerNotifier {
         print('STOP: handler came up in an engine with no native player — stopping');
         await _audioHandler?.stop();
         return;
+      }
+
+      // A Bluetooth headset's PAUSE pauses and its PLAY plays, instead of both
+      // toggling (a stray PAUSE used to start Auvy). Android only.
+      if (Platform.isAndroid) {
+        final literal = await NativeAudioEngine.useLiteralMediaKeys();
+        print(literal
+            ? 'media keys: PLAY and PAUSE answered as themselves'
+            : 'WARN: media keys left to audio_service (a PAUSE key toggles)');
       }
 
       // The launch restore can push the restored track's MediaItem before the
@@ -294,6 +306,8 @@ extension PlayerSystemController on PlayerNotifier {
 
       _subscriptions.add(session.interruptionEventStream.listen((event) {
         if (event.begin) {
+          // Any new interruption overtakes a resume still waiting on the last one.
+          _interruptionGeneration++;
           switch (event.type) {
             case AudioInterruptionType.duck:
               // Brief dip (navigation prompt, notification): lower the volume.
@@ -328,11 +342,30 @@ extension PlayerSystemController on PlayerNotifier {
               NativeAudioEngine.setVolume(currentState.volume);
               break;
             case AudioInterruptionType.pause:
-              // Interruption over: resume only if we paused it above and the OS allows
+              // Interruption over: resume only if it was paused above and the OS allows
               // resuming (shouldResume on iOS).
               if (_playInterrupted && !currentState.isPlaying) {
-                print('Audio interruption ended with shouldResume — resuming playback');
-                togglePlay(haptic: false);
+                // Not at once, and not over another app. An app that lets go of the
+                // audio between short videos and takes it back a moment later would
+                // otherwise start and stop Auvy with every one (Android has the same
+                // rule natively: no resume while someone else is playing).
+                final generation = _interruptionGeneration;
+                print('Audio interruption ended with shouldResume — resuming in 1 s '
+                    'unless another app is playing');
+                Future.delayed(const Duration(seconds: 1), () async {
+                  if (!mounted || generation != _interruptionGeneration || currentState.isPlaying) {
+                    return;
+                  }
+                  if (await NativeAudioEngine.otherAppIsPlaying()) {
+                    print('Audio interruption ended, but another app is playing — staying paused');
+                    return;
+                  }
+                  if (!mounted || generation != _interruptionGeneration || currentState.isPlaying) {
+                    return;
+                  }
+                  print('Audio interruption over — resuming playback');
+                  togglePlay(haptic: false);
+                });
               } else {
                 print('Audio interruption ended (pause) but not resuming: interrupted=$_playInterrupted isPlaying=${currentState.isPlaying}');
               }
@@ -424,7 +457,7 @@ extension PlayerSystemController on PlayerNotifier {
         // race and sets isPlaying false before this runs; see the next block for how
         // that case is still recorded.
         if (lostHeadphone) {
-          // Record the device loss anyway when native paused just before us. Two
+          // Record the device loss anyway when native paused just before this handler. Two
           // callbacks react to one hardware event and the pause still happened because
           // the device went away; without the record, reconnecting could only resume
           // through the unconditional "play on connect" setting.
@@ -467,7 +500,7 @@ extension PlayerSystemController on PlayerNotifier {
 
         // Two separate reasons to resume:
         //
-        //  1. We paused this playback because the device went away, recently.
+        //  1. This playback was paused because the device went away, recently.
         //     Resuming just continues what the user was listening to.
         //  2. The user turned on "Play on device connect".
         //
@@ -498,7 +531,7 @@ extension PlayerSystemController on PlayerNotifier {
           }
 
           // Only the setting (reason 2) needs a sanity check, since reason 1 fires only
-          // moments after we paused. This path calls togglePlay() directly and bypasses
+          // moments after the pause. This path calls togglePlay() directly and bypasses
           // the audio handler's external-play guard, so check here that no other app is
           // playing. Done after the delay so isMusicActive() isn't confused by Auvy's own
           // fading output.
@@ -908,6 +941,8 @@ extension PlayerSystemController on PlayerNotifier {
       }
     });
 
+    // Songs' waveforms are read as their files land (see TrackWaveform).
+    TrackWaveform.instance.listen();
     NativeAudioEngine.setListeners(
       // Recover from a fatal stream error (403/expired) by re-resolving and
       // resuming. playWhenReady carries the user's real play intent; isPlaying is
@@ -925,7 +960,7 @@ extension PlayerSystemController on PlayerNotifier {
         if (!mounted) return;
         _lastNativePosition = position;
         _lastNativePositionAt = DateTime.now();
-        // Record "we were playing a moment ago" for the disconnect handler, since
+        // Record "playing a moment ago" for the disconnect handler, since
         // native's becoming-noisy pause often sets isPlaying false before it runs.
         if (isPlaying) _lastPlayingAt = DateTime.now();
         // Clear a stuck `isLoading` once native reports playback (playing, or the
@@ -1084,8 +1119,9 @@ extension PlayerSystemController on PlayerNotifier {
           handleStreamLeaseExpiration(intendedPlaying: true, resumeFrom: effectivePos);
           return;
         }
-        // The track played to the end, so its audio is in the native play cache:
-        // promote it into the Cached folder with no network use. Skips radio,
+        // The track played to the end, so the native player holds all of it (its
+        // fetched file, or a stream's play cache): promote it into the Cached folder
+        // with no network use. Skips radio,
         // podcasts, non-video ids and tracks already cached. Fire-and-forget.
         if (cs != null &&
             !cs.id.startsWith('http') &&
@@ -1219,8 +1255,8 @@ extension PlayerSystemController on PlayerNotifier {
           return;
         }
         final finished = currentState.currentSong;
-        // The track played to the end, so its bytes are in the play cache: promote it
-        // for free (as in onTrackEnded).
+        // The track played to the end, so the native player holds all of it: promote
+        // it for free (as in onTrackEnded).
         if (finished != null &&
             !finished.id.startsWith('http') &&
             finished.albumTitle != 'Podcast' &&
@@ -1659,20 +1695,24 @@ extension PlayerSystemController on PlayerNotifier {
   /// Puts a just-loaded [song] at [target] and keeps it there.
   ///
   /// A seek sent before the native player has the track can be dropped, and its
-  /// first position reports (0:00) then reset the bar: seen on Android and iOS
-  /// (2026-10-16), a song handed over from another device showed the right
-  /// second and then went back to 0:00, and was handed back from there. So the
+  /// first position reports (0:00) then reset the bar: a song handed over from
+  /// another device showed the right second, then went back to 0:00, and was
+  /// handed back from there. So the
   /// target is held like a user's seek (stale reports ignored), and the
   /// player's own reports are watched for eight seconds: whenever one lands more
   /// than two seconds off (including a report that looked right and then a
-  /// restart from 0:00 once a fetched file arrived, seen on iOS), it
+  /// restart from 0:00 once a fetched file arrived), it
   /// seeks again, at most five times. While [playing], the target moves on with
   /// the clock. It stops as soon as the listener does something themselves:
-  /// another seek, a play or pause tap, or another song.
+  /// another seek, a play or pause tap, or another song. A seek is noticed by
+  /// [_seekRequests], not only by the hold it leaves: a song played from a file
+  /// lands a seek in milliseconds, the hold is gone by the next look, and a
+  /// restart from Previous was then pulled back to the restored second.
   Future<void> _settleAt(Song song, Duration target, {required bool playing}) async {
     if (target < const Duration(seconds: 1)) return;
     final started = DateTime.now();
     final tapBefore = _lastPlayPauseHapticAt;
+    final seeksBefore = _seekRequests;
     Duration expected() => playing ? target + DateTime.now().difference(started) : target;
     Duration? ours;
     var seeks = 0;
@@ -1681,6 +1721,7 @@ extension PlayerSystemController on PlayerNotifier {
     while (DateTime.now().difference(started) < const Duration(seconds: 8)) {
       if (!mounted || currentState.currentSong?.id != song.id) return;
       if (_lastPlayPauseHapticAt != tapBefore) return; // the listener tapped play/pause
+      if (_seekRequests != seeksBefore) return; // the listener sought
       final held = _pendingSeekTarget;
       if (ours != null && held != null && held != ours) return; // the listener sought
       if (needSeek) {

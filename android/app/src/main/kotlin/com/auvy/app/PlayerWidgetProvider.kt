@@ -301,7 +301,7 @@ class PlayerWidgetProvider : AppWidgetProvider() {
                 if (isLiked) R.drawable.ic_widget_liked else R.drawable.ic_widget_like)
             views.setInt(R.id.widget_like, "setColorFilter", if (isLiked) accent else 0xD9FFFFFF.toInt())
             views.setContentDescription(R.id.widget_like, if (isLiked) "Remove from Liked Songs" else "Like")
-            // What each size shows, as on the iPhone: the small one has play only, the
+            // What each size shows, as on iOS: the small one has play only, the
             // medium and large ones the full row; the strip has no room for extras.
             val small = layout == R.layout.widget_player_small
             val strip = layout == R.layout.widget_player

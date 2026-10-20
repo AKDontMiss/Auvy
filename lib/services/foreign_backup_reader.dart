@@ -29,7 +29,7 @@ import 'package:sqflite/sqflite.dart';
 class ForeignBackupReader {
   ForeignBackupReader._();
 
-  /// Entries that tell us this is a music-app database backup.
+  /// Entries that mark this as a music-app database backup.
   static const List<String> _dbEntryNames = [
     'song.db', // Metrolist / InnerTune / OuterTune
     'internal.db',
@@ -120,7 +120,7 @@ class ForeignBackupReader {
 
       // Into the CACHE directory, not documents: this copy is scratch, and it is
       // deleted in the finally block whether or not the read succeeds. A foreign
-      // database left lying around is another app's data sitting in ours.
+      // database left lying around is another app's data sitting in Auvy's.
       final cache = await getTemporaryDirectory();
       // Unique per import: sqflite caches open handles by path, and a stale
       // handle from a previous import would be handed back for a different file.
@@ -211,7 +211,7 @@ class ForeignBackupReader {
           'play dates, ${result.searchHistory.length} search(es)');
       return result;
     } catch (e) {
-      // A malformed archive, an encrypted database, a schema we cannot read —
+      // A malformed archive, an encrypted database, a schema that cannot be read —
       // all "cannot import this file", none worth crashing a restore screen.
       print('WARN: foreign backup: unreadable ($e)');
       return null;

@@ -339,7 +339,7 @@ class ArtworkOverrideNotifier extends StateNotifier<Map<String, String>> {
           if (old.existsSync()) await old.delete();
         } catch (_) {}
         // AuvyImage memoises "this file exists" to keep a blocking stat out of
-        // build; drop the entry for a path we just deleted.
+        // build; drop the entry for a path just deleted.
         auvyImageForgetFile(previous);
       }
       // Also forget the path in AuvyImage's file-existence memo.

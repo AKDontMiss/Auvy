@@ -78,13 +78,13 @@ class TrackRefetchService {
   ///
   /// Returns what changed. Never throws: a refetch failing is a "nothing found",
   /// not an error dialog.
-  static Future<TrackRefetchOutcome> refetch(WidgetRef ref, Song song) async {
+  static Future<TrackRefetchOutcome> refetch(ProviderContainer providers, Song song) async {
     // Live radio has no catalogue entry, no lyrics and no album — there is nothing
     // to refetch, and searching for the station name would return music.
     final isLiveRadio = song.id.startsWith('http') && song.albumTitle != 'Podcast';
     if (isLiveRadio) return const TrackRefetchOutcome(notFound: true);
 
-    final search = ref.read(searchServiceProvider);
+    final search = providers.read(searchServiceProvider);
 
     // 1. Drop every cached answer for this track
     SearchService.forgetConform(song.id);
@@ -142,9 +142,9 @@ class TrackRefetchService {
     // 3. Apply it everywhere a copy is kept
     if (delta.any) {
       _evictImage(fresh.image);
-      ref.read(playerProvider.notifier).applyRefreshedMetadata(fresh);
-      ref.read(libraryProvider.notifier).replaceSongEverywhere(fresh);
-      // And the two copies that outlived the refresh before (2026-10-17): the
+      providers.read(playerProvider.notifier).applyRefreshedMetadata(fresh);
+      providers.read(libraryProvider.notifier).replaceSongEverywhere(fresh);
+      // And the two copies that used to outlive the refresh: the
       // audio cache's entry, whose saved cover won on the next play, and the
       // taste data's, which the home page and Quick Picks show.
       try {
@@ -152,7 +152,7 @@ class TrackRefetchService {
         _evictImage(replaced);
       } catch (_) {}
       try {
-        ref.read(intelligenceProvider.notifier).applyRefreshedMetadata(fresh);
+        providers.read(intelligenceProvider.notifier).applyRefreshedMetadata(fresh);
       } catch (_) {}
     }
 
@@ -180,7 +180,7 @@ class TrackRefetchService {
       } catch (_) {}
     }
 
-    final overridden = ref.read(artworkOverrideProvider).containsKey(fresh.id);
+    final overridden = providers.read(artworkOverrideProvider).containsKey(fresh.id);
     return TrackRefetchOutcome(
       delta: delta,
       lyrics: lyricsFound,

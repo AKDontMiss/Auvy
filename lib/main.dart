@@ -143,7 +143,7 @@ void main() {
       // The reliable signal is whether the native player channel exists: MainActivity
       // registers it, and a headless engine does not have it. The check costs one
       // channel call; in a headless engine it fails immediately.
-      // Starts the real app exactly once, however we got here.
+      // Starts the real app exactly once, however it was reached.
       var appStarted = false;
       void startApp(String why) {
         if (appStarted) return;
@@ -164,8 +164,34 @@ void main() {
       // audio_service's cached engine, so the engine that started headless may later
       // gain a screen, and main() will not run again. When an Activity attaches, the
       // platform side pings `auvy/engine_lifecycle` and the app starts then.
+      //
+      // The one exception is Android Auto. The car browses and plays through
+      // audio_service, whose requests queue until the app registers its handler,
+      // so a car connected to a phone with Auvy closed showed a spinner forever.
+      // While the car is connected (AuvyApplication answers on `auvy/engine`),
+      // the engine gets its own native player and the app starts with no screen.
+      const engine = MethodChannel('auvy/engine');
+      Future<bool> startForCar() async {
+        if (appStarted) return true;
+        try {
+          if (await engine.invokeMethod<bool>('carConnected') != true) return false;
+          await engine.invokeMethod<bool>('attachPlayer');
+        } catch (_) {
+          return false; // iOS, or a build without the hook: no car start
+        }
+        NativeAudioEngine.onActivityAttached();
+        await NativeAudioEngine.isMusicActive();
+        if (!NativeAudioEngine.platformAvailable) return false;
+        startApp('Android Auto connected, no screen');
+        return true;
+      }
+
       const lifecycle = MethodChannel('auvy/engine_lifecycle');
       lifecycle.setMethodCallHandler((call) async {
+        if (call.method == 'carConnected') {
+          await startForCar();
+          return null;
+        }
         if (call.method != 'activityAttached') return null;
         // The Activity registered its channels on this engine, so clear the earlier
         // "no native player" verdict.
@@ -179,10 +205,12 @@ void main() {
 
       await NativeAudioEngine.isMusicActive();
       if (!NativeAudioEngine.platformAvailable) {
+        if (await startForCar()) return;
         print('STOP: No native player in this engine — it has no screen. NOT '
             'starting the app YET. (headless service engine: QS tile render, '
             'widget update, media button, Bluetooth connect, media-resumption '
-            'probe). Armed: will start if an Activity attaches.');
+            'probe). Armed: will start if an Activity attaches or Android Auto '
+            'connects.');
         return;
       }
 

@@ -7,8 +7,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 ///
 /// The history lists every play, but the device used to be looked up per SONG
 /// (the device of its latest play), so every play of a song showed that one
-/// device, sometimes the wrong one, and older plays showed none (seen
-/// 2026-10-16). A play is identified by its song and the exact
+/// device, sometimes the wrong one, and older plays showed none. A play is
+/// identified by its song and the exact
 /// stamp in `playHistory` (`<songId>@<ms>`), which every device holds the same
 /// once the ledger has synced.
 ///

@@ -11,8 +11,8 @@ import 'package:crypto/crypto.dart';
 /// are pinned instead of left to plugin defaults:
 ///
 ///  • resetOnError: false. The plugin default lets any transient keystore error
-///    delete the key or the whole store. With it off, errors reach us and we
-///    degrade gracefully instead of losing secrets.
+///    delete the key or the whole store. With it off, errors surface here and
+///    the app degrades gracefully instead of losing secrets.
 ///  • cipher pair: pinned to what the current plugin writes (RSA-OAEP-wrapped key
 ///    + AES-GCM data). If the stored algorithm markers ever differ from the
 ///    configured pair, the plugin re-keys the store; pinning keeps a future
@@ -138,7 +138,7 @@ class SessionCookieManager {
   }
 
   /// Best-effort recovery of a legacy blob whose random IV was lost. In AES-CBC a
-  /// wrong IV only garbles the first 16-byte block, so we drop everything up to
+  /// wrong IV only garbles the first 16-byte block, so everything is dropped up to
   /// the first intact `","` boundary of the JSON map and re-open the object,
   /// losing at most one cookie.
   Future<Map<String, String>?> _salvageLegacyCipher(String stored) async {
@@ -415,7 +415,7 @@ class SessionCookieManager {
     _cachedCookies = null;
     // Also clear the platform cookie store, which holds the real HttpOnly auth
     // cookies (SID / __Secure-3PSID). Otherwise logout or account deletion wiped
-    // only our copy, and ensureSession() re-imported the surviving session.
+    // only Auvy's copy, and ensureSession() re-imported the surviving session.
     try {
       await WebViewCookieManager().clearCookies();
     } catch (e) {

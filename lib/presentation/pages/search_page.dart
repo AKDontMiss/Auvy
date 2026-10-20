@@ -145,7 +145,7 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     String type = _selectedFilter == 'All' ? 'all' : _selectedFilter.toLowerCase().substring(0, _selectedFilter.length - 1);
     ref.read(searchProvider.notifier).performSearch(query, type: type);
     
-    // When tapping history, we also update it to the top
+    // Tapping a history entry also moves it to the top
     ref.read(searchProvider.notifier).saveSearch(query);
     FocusManager.instance.primaryFocus?.unfocus();
   }
@@ -797,7 +797,7 @@ return TweenAnimationBuilder<double>(
                           source: ListenSource.device),
                       child: Padding(
                         // Keeps the 48dp minimum touch target the IconButton gave
-                        // us for free.
+                        // for free.
                         padding: const EdgeInsets.all(13.5),
                         // A neutral glyph rather than the Shazam logo: Auvy has no agreement with
                         // Shazam/Apple, so it shouldn't carry their trademark.

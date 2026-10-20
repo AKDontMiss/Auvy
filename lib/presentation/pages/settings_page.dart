@@ -104,7 +104,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 
     // force:true — Settings is pushed on the ROOT navigator (over MainLayout),
     // so unlike a tab sub-page it has no shared app backdrop beneath it. Paint
-    // our OWN backdrop here (instead of passing through to the global one that
+    // its OWN backdrop here (instead of passing through to the global one that
     // lives under MainLayout) so the library page never shows through. Paired
     // with the opaque route in AppNavigation.pushRoot(..., opaque: true).
     return DynamicBackground(
@@ -1660,8 +1660,8 @@ class _UsageBlockState extends ConsumerState<_UsageBlock> {
   void initState() {
     super.initState();
     // Pull the native player's byte count before showing a total: audio never passes
-    // Dart's HTTP client (ExoPlayer on Android, AuvyStreamLoader on iOS). Done when the
-    // screen opens, the only time anyone looks (see
+    // Dart's HTTP client (TrackFetcher and ExoPlayer on Android, AuvyStreamLoader on
+    // iOS). Done when the screen opens, the only time anyone looks (see
     // DataUsageNotifier.syncNativeAudioBytes).
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -2076,7 +2076,9 @@ class _AccountBlock extends ConsumerWidget {
           "This permanently deletes your Auvy data (library, playlists, listening "
           "history, recommendations and downloaded files) from Auvy's servers and "
           "this phone.\n\nThis does NOT delete your Google/YouTube account. If you "
-          "sign in again with the same account, you'll start over from scratch.",
+          "sign in again with the same account, you'll start over from scratch.\n\n"
+          "The sign-in record Auvy's service keeps (your account and its devices) "
+          "is erased when you ask the person who approved your account.",
           style: TextStyle(color: Colors.white70, fontSize: 13, height: 1.4),
         ),
         actions: [
@@ -2087,7 +2089,7 @@ class _AccountBlock extends ConsumerWidget {
           TextButton(
             onPressed: () async {
               Navigator.pop(ctx); // close the confirm dialog
-              // Non-dismissible progress spinner while we wipe everything.
+              // Non-dismissible progress spinner while everything is wiped.
               showDialog(
                 context: context,
                 barrierDismissible: false,
@@ -2421,7 +2423,7 @@ class _SliderPreviewAnimatorState extends State<_SliderPreviewAnimator>
                 onChanged: (_) {},
               );
             case SliderStyle.waveform:
-              return WaveformSlider(progress: progress, themeColor: widget.themeColor, onChanged: (_) {});
+              return WaveformSlider(progress: progress, themeColor: widget.themeColor, onChanged: (_) {}, levels: WaveformSlider.sample);
             case SliderStyle.material:
               return MaterialThumbSlider(progress: progress, themeColor: widget.themeColor, onChanged: (_) {});
             case SliderStyle.minimal:

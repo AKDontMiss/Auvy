@@ -223,7 +223,7 @@ class _StatsPageState extends ConsumerState<StatsPage> {
             plays: plays, minutes: minutes, source: song);
       } else {
         trackMap[tsig] = _RankedItem(
-            // Keep the title/artist of whichever variant we saw first, but prefer
+            // Keep the title/artist of whichever variant came first, but prefer
             // a SQUARE cover: the video-id variant carries a 16:9 still.
             title: existing.title, subtitle: existing.subtitle,
             image: _preferSquare(existing.image, song.image),

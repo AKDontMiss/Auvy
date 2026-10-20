@@ -769,7 +769,7 @@ class WhatsNewNotifier extends StateNotifier<WhatsNewState> {
   ///
   /// One write at a time. Two at once (a restore fires several changes
   /// together) shared the temp file, and the second's rename found it already
-  /// moved: seen on Android as "Cannot rename file … watch.json".
+  /// moved ("Cannot rename file … watch.json").
   Future<void> _writeWatch() =>
       _watchWrite = _watchWrite.then((_) => _writeWatchNow());
 

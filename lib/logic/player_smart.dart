@@ -343,7 +343,7 @@ extension PlayerSmartController on PlayerNotifier {
           ...currentState.contextQueue,
           ...updatedAutoplay,
         ];
-        // The native player owns playback; here we only update the queue state.
+        // The native player owns playback; only the queue state is updated here.
         if (!mounted) return;
         currentState = currentState.copyWith(
           autoplayQueue: updatedAutoplay,
@@ -827,14 +827,18 @@ extension PlayerSmartController on PlayerNotifier {
       final intel = ref.read(intelligenceProvider);
       final intelNotifier = ref.read(intelligenceProvider.notifier);
 
+      // The history too, as the top-up does (_topUpQueueInner): every track that
+      // starts goes into it, skipped ones included. Without it, the refresh after
+      // three quick skips put a track skipped at once straight back as next.
       final existingIds = {
         ...currentState.autoplayQueue.map((s) => s.id),
         ...currentState.contextQueue.map((s) => s.id),
         ...currentState.userQueue.map((s) => s.id),
+        ...currentState.history.map((s) => s.id),
         currentSong.id,
       };
 
-      print("Refreshing Autoplay - Avoiding ${existingIds.length} existing tracks");
+      print("Refreshing Autoplay - Avoiding ${existingIds.length} queued or played tracks");
 
       // Seed from the current artist unless it's a placeholder. getSmartSeeds drops
       // junk seeds and falls back to the user's own affinities.
@@ -1259,9 +1263,8 @@ extension PlayerSmartController on PlayerNotifier {
   // is seamless.
   static const int _preloadLeadSeconds = 12;
 
-  /// How long a new "next track" must stay next before its stream is resolved and
-  /// its opening bytes fetched: long enough that skipping spends nothing, short
-  /// enough to be unnoticeable.
+  /// How long a new "next track" must stay next before its stream is resolved:
+  /// long enough that skipping spends nothing, short enough to be unnoticeable.
   static const Duration _preloadSettleWindow = Duration(seconds: 3);
 
   /// Replaces every occurrence of [from] with [to] across the queue lanes. Used by
@@ -1323,38 +1326,54 @@ extension PlayerSmartController on PlayerNotifier {
     // Skip tracks too short to be worth pre-warming.
     if (duration.inSeconds <= _preloadLeadSeconds + 3) return;
     // Fire once the current track has a few seconds of playback or enters the
-    // lead window, whichever comes first, so the next track's opening bytes are
-    // cached before a screen-off network blackout. _preloadedSongId keeps it to
-    // one warm-up.
+    // lead window, whichever comes first, so the next track's stream is resolved
+    // before a screen-off network blackout. _preloadedSongId keeps it to one
+    // warm-up.
     final remaining = duration - position;
+
+    // Going back through history (Previous), the track that follows is the
+    // history entry after this one (see playNext), not queue[1]. It is fetched
+    // ahead but never queued for a gapless change: queued, the player rolled into
+    // queue[1] for a moment before playNext switched to the history track.
+    final viaHistory = _navIndex > 0;
+    // Next index, wrapping to 0 only when Repeat All is on.
+    int nextIndex = 1;
+    final Song song;
+    if (viaHistory) {
+      if (_navIndex - 1 >= currentState.history.length) return;
+      song = currentState.history[_navIndex - 1];
+    } else {
+      if (nextIndex >= currentState.queue.length) {
+        if (currentState.repeatMode == RepeatMode.all) {
+          nextIndex = 0;
+        } else {
+          return;
+        }
+      }
+      song = currentState.queue[nextIndex];
+    }
+    // Whether [id] is still what follows, after the awaits below.
+    bool stillNext(String id) => viaHistory
+        ? _navIndex > 0 && _navIndex - 1 < currentState.history.length &&
+            currentState.history[_navIndex - 1].id == id
+        : currentState.queue.length > nextIndex && currentState.queue[nextIndex].id == id;
+
     // A next track that is already on disk is prepared immediately instead of
     // waiting out the first seconds of playback. After a skip the position is 0,
     // so without this nothing is prepared and a second quick skip falls back to a
-    // full load. The wait exists to avoid a stream lookup and ~1 MB download for
+    // full load. The wait exists to avoid a stream lookup and a download for
     // tracks that get skipped; a local file costs neither.
-    final nextId = currentState.queue.length > 1 ? currentState.queue[1].id : '';
-    final nextIsOnDisk = nextId.isNotEmpty && _cacheManager.isCached(nextId);
+    final nextIsOnDisk = _cacheManager.isCached(song.id);
     final earlyEnough = position.inSeconds >= 8 || nextIsOnDisk;
     final inLeadWindow =
         remaining.inSeconds <= _preloadLeadSeconds && remaining.inSeconds > 0;
     if (!earlyEnough && !inLeadWindow) return;
 
-    // Next index, wrapping to 0 only when Repeat All is on.
-    int nextIndex = 1;
-    if (nextIndex >= currentState.queue.length) {
-      if (currentState.repeatMode == RepeatMode.all) {
-        nextIndex = 0;
-      } else {
-        return;
-      }
-    }
-
-    final song = currentState.queue[nextIndex];
     if (_preloadedSongId == song.id) return;
 
     // Let a changed "next" settle before spending data on it. While the user
     // skips, "next" changes every few seconds, and warming each one (a stream
-    // lookup plus ~1 MB) would be wasted. The position tick re-enters about twice
+    // lookup) would be wasted. The position tick re-enters about twice
     // a second, so waiting needs no timer. Exceptions: inside the lead window there
     // is no time to wait, and a cached track costs no network.
     if (!inLeadWindow && !_cacheManager.isCached(song.id)) {
@@ -1382,10 +1401,10 @@ extension PlayerSmartController on PlayerNotifier {
     try {
       final connectivity = ref.read(connectivityProvider);
 
-      // 1) Pre-warm the next track: resolve its URL and fetch its first ~1 MB into
-      //    the native play cache, so the switch starts instantly without downloading
-      //    the whole track. This also warms the Dart resolver cache for any later
-      //    re-resolve. Radio and podcasts are not pre-warmed.
+      // 1) Name the next track to the native player: resolve its URL, which native
+      //    uses to fetch the whole track in the current one's last 25 seconds, so
+      //    the switch starts from disk. This also warms the Dart resolver cache for
+      //    any later re-resolve. Radio and podcasts are not fetched ahead.
       if (!song.id.startsWith('http')) {
         // The track that will actually play next. With gapless on, the native
         // auto-advance bypasses playSong's audio-only swap, so a music video must be
@@ -1393,6 +1412,7 @@ extension PlayerSmartController on PlayerNotifier {
         // transition's id matches queue[1].
         Song upcoming = song;
         if (currentState.gaplessPlayback &&
+            !viaHistory &&
             !currentState.processVideosEnabled &&
             !_cacheManager.isCached(upcoming.id)) {
           // Must match playSong's audio-only swap conditions exactly: a tagged music
@@ -1422,12 +1442,10 @@ extension PlayerSmartController on PlayerNotifier {
         // the upcoming item so downloaded albums play gaplessly too.
         final cachedNextPath = _cacheManager.getCachedPath(upcoming.id);
         if (cachedNextPath != null) {
-          if (currentState.gaplessPlayback) {
+          if (currentState.gaplessPlayback && !viaHistory) {
             // Re-check it is still up next: the user may have edited the queue during the
             // awaits above.
-            final stillNext = currentState.queue.length > nextIndex &&
-                currentState.queue[nextIndex].id == upcoming.id;
-            if (stillNext) {
+            if (stillNext(upcoming.id)) {
               await NativeAudioEngine.setUpcoming(
                 upcoming.id,
                 '', // no URL needed — it plays from the file
@@ -1462,19 +1480,17 @@ extension PlayerSmartController on PlayerNotifier {
           // The queue may have changed during the resolve. Only prepare this as the
           // native upcoming item if it is still up next; resyncUpcomingIfChanged clears
           // it on edits, and this stops an in-flight resolve from re-adding it.
-          final stillNext = currentState.queue.length > nextIndex &&
-              currentState.queue[nextIndex].id == upcoming.id;
-          if (url != null && url.isNotEmpty && stillNext) {
-            if (currentState.gaplessPlayback) {
-              // Queue it as the native player's next item, which is pre-buffered and plays
-              // with no gap.
+          if (url != null && url.isNotEmpty && stillNext(upcoming.id)) {
+            if (currentState.gaplessPlayback && !viaHistory) {
+              // Queue it as the native player's next item, which plays with no gap.
               await NativeAudioEngine.setUpcoming(
                 upcoming.id, url,
                 userAgent: stream?['user_agent'],
                 contentLength: int.tryParse(stream?['contentLength'] ?? '0'),
               );
             } else {
-              // Gapless off: pre-warm the first ~1 MB and let Dart advance.
+              // Gapless off, or going back through history: fetched ahead, and
+              // Dart advances.
               await NativeAudioEngine.prewarmNext(
                 upcoming.id, url,
                 userAgent: stream?['user_agent'],
@@ -1815,7 +1831,7 @@ extension PlayerSmartController on PlayerNotifier {
         if (attempt == 1) {
           print('WARN: Heal attempt 1 found no stream — retrying in 2s…');
           await Future.delayed(const Duration(seconds: 2));
-          // The user may have moved on while we waited.
+          // The user may have moved on during the wait.
           if (!mounted || currentState.currentSong?.id != currentSong.id) return;
         }
       }

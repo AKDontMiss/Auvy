@@ -23,3 +23,16 @@ class AppColors {
   static final Color whiteFaded08 = Colors.white.withValues(alpha: 0.08);
   static final Color whiteFaded04 = Colors.white.withValues(alpha: 0.04);
 }
+
+/// The colour in the library's themed images' names (`liked_songs_purple.webp`
+/// and the rest): the preset the accent is, or cyan for any other colour. Shared
+/// by the library, the playlist page and Android Auto, so all three match.
+String themedArtSuffix(Color accent) {
+  final argb = accent.toARGB32();
+  if (argb == Colors.purpleAccent.toARGB32()) return 'purple';
+  if (argb == Colors.greenAccent.toARGB32()) return 'green';
+  if (argb == Colors.orangeAccent.toARGB32()) return 'orange';
+  if (argb == Colors.redAccent.toARGB32()) return 'red';
+  if (argb == Colors.pinkAccent.toARGB32()) return 'pink';
+  return 'cyan';
+}

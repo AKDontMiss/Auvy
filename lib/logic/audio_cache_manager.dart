@@ -40,8 +40,9 @@ import 'package:auvy/core/utils/container_path_resolver.dart';
 /// survive a reinstall.
 ///
 /// Note: cacheTrack() with an empty url downloads nothing. It checks whether the
-/// native play cache already holds the whole track and, if so, copies those
-/// bytes. That is how a track you just listened to becomes cached for free.
+/// native player already holds the whole track (the file it fetched to play it,
+/// or a stream's play cache) and, if so, copies those bytes. That is how a track
+/// you just listened to becomes cached for free.
 class AudioCacheManager {
   static final AudioCacheManager _instance = AudioCacheManager._internal();
   factory AudioCacheManager() => _instance;
@@ -144,8 +145,21 @@ class AudioCacheManager {
     bool hasPermission = true;
     if (Platform.isAndroid) {
       // Both legacy storage and Android 13+ audio permissions.
-      final status = await [Permission.storage, Permission.audio].request();
-      hasPermission = status[Permission.storage] == PermissionStatus.granted || 
+      Map<Permission, PermissionStatus> status;
+      try {
+        status = await [Permission.storage, Permission.audio].request();
+      } catch (e) {
+        // No screen to ask from: Android Auto starts the app with the phone
+        // locked, and asking throws "Unable to detect current Android Activity",
+        // which used to abort this whole init and with it the library load (the
+        // car showed only Recently Played). Read what was already granted instead.
+        print('audio cache: no screen to ask for storage access from — using what was granted');
+        status = {
+          Permission.storage: await Permission.storage.status,
+          Permission.audio: await Permission.audio.status,
+        };
+      }
+      hasPermission = status[Permission.storage] == PermissionStatus.granted ||
                       status[Permission.audio] == PermissionStatus.granted;
     }
 
@@ -594,7 +608,7 @@ class AudioCacheManager {
           }
         } catch (_) {}
 
-        // Fall back to the file name ("Artist - Title.ext", our own convention).
+        // Fall back to the file name ("Artist - Title.ext", Auvy's own convention).
         final fileName = rel.split('/').last;
         final baseName = fileName.replaceAll(RegExp(r'\.[^.]+$'), '');
         if (title.isEmpty) {
@@ -1011,8 +1025,8 @@ class AudioCacheManager {
   /// Not every download is `.m4a`: YouTube's best audio is Opus in WebM. With the
   /// wrong extension, MP4 tags and cover art can't be written, and Android's media
   /// scanner refuses the file, so other apps can't see it.
-  /// Sniffing the bytes also works for files promoted from the native play cache,
-  /// where no mime type was ever seen.
+  /// Sniffing the bytes also works for files promoted from the native player's
+  /// copy, where no mime type was ever seen.
   static Future<String?> _sniffAudioExtension(File f) async {
     try {
       final raf = await f.open();
@@ -1084,8 +1098,8 @@ class AudioCacheManager {
   /// Caches or downloads a track (audio, cover art and lyrics) and records it
   /// in the index. Returns true when a playable file ended up on disk.
   ///
-  /// An empty [streamUrl] means "promote only": copy the bytes from the native
-  /// play cache if it holds the whole track, and download nothing.
+  /// An empty [streamUrl] means "promote only": copy the native player's whole
+  /// copy of the track if it has one, and download nothing.
   /// [isExplicitDownload] puts the file in the public downloads folder and
   /// protects it from eviction.
   Future<bool> cacheTrack(Song song, String streamUrl, {
@@ -1205,11 +1219,12 @@ class AudioCacheManager {
         // Task A: audio.
         () async {
           if (!isCached(song.id) || redownloadForTags) {
-            // Promotion first: if the native play cache holds the whole track (streamed end
-            // to end), copy those bytes instead of downloading again. No data cost; falls
-            // through to HTTP only when the play cache doesn't have it all.
+            // Promotion first: if the native player holds the whole track (the file it
+            // fetched to play it, or a stream's play cache), copy those bytes instead of
+            // downloading again. No data cost; falls through to HTTP only when it
+            // doesn't have it all.
             //
-            // Skipped for a tag re-fetch, since the play cache holds the untaggable Opus
+            // Skipped for a tag re-fetch, since the player's copy is the untaggable Opus
             // this download is replacing.
             try {
               final promo = redownloadForTags
@@ -1408,8 +1423,8 @@ class AudioCacheManager {
         // normal answer (a track played from a local file or only partly streamed), so
         // it gets its own quieter message.
         if (streamUrl.isEmpty) {
-          print('"${song.title}" not promoted — the play-cache does not hold '
-              'it whole, and there is no url to fetch it from');
+          print('"${song.title}" not promoted — the player has no whole copy '
+              'of it, and there is no url to fetch it from');
         } else {
           print('WARN: download incomplete or truncated for "${song.title}" ($fileSizeBytes B) — '
               'partial bytes discarded, nothing registered as cached');
@@ -2198,8 +2213,8 @@ class AudioCacheManager {
   ///
   /// The entry used to keep what it had when the track was cached, and its
   /// saved cover file won wherever art is shown (getDisplayImage), so a refresh
-  /// showed on the player and was gone again by the next play (owner,
-  /// 2026-10-17); a re-cache didn't fix it either, since it reuses a cover file
+  /// showed on the player and was gone again by the next play; a re-cache didn't
+  /// fix it either, since it reuses a cover file
   /// already on disk. The new cover goes in under a NEW file name (an image
   /// cache keyed by the old path could show the old pixels otherwise), and the
   /// old file is deleted; if the new one can't be fetched, the entry keeps no

@@ -59,6 +59,10 @@ class NativeAudioEngine {
   /// stop instead of retrying.
   static void Function()? onPlatformLost;
 
+  /// A song's whole file is on the device: the one about to play, or the next,
+  /// fetched ahead (TrackWaveform listens, to read its waveform).
+  static void Function(String videoId)? onFetched;
+
   /// Clears [_platformGone] when an Activity attaches and registers the channels.
   ///
   /// The same engine can start headless and gain a screen later (MainActivity
@@ -160,6 +164,11 @@ class NativeAudioEngine {
         case 'onBuffering':
           final a = (call.arguments as Map?) ?? const {};
           _onBuffering?.call(a['buffering'] as bool? ?? false);
+          break;
+        case 'onFetched':
+          final a = (call.arguments as Map?) ?? const {};
+          final id = '${a['videoId'] ?? ''}';
+          if (id.isNotEmpty) onFetched?.call(id);
           break;
         case 'onIcyMetadata':
           final a = (call.arguments as Map?) ?? const {};
@@ -265,8 +274,9 @@ class NativeAudioEngine {
     });
   }
 
-  /// Pre-warms the next track: seeds its URL and caches its first ~1 MB so the
-  /// switch starts instantly. YouTube ids only.
+  /// Names the next track when gapless is off: native seeds its URL and fetches
+  /// it whole in the current track's last 25 seconds, so the switch starts from
+  /// disk. YouTube ids only.
   static Future<void> prewarmNext(String videoId, String url,
       {String? userAgent, int? contentLength}) async {
     if (videoId.isEmpty || url.isEmpty || videoId.startsWith('http')) return;
@@ -280,11 +290,11 @@ class NativeAudioEngine {
     } catch (_) {}
   }
 
-  /// Gapless: queues the next track natively so it is pre-buffered and starts with
-  /// no gap. Used when the gapless setting is on (otherwise [prewarmNext]). YouTube
-  /// ids only; native ignores a repeat of the already-queued track. iOS never
-  /// queues it: for both calls it fetches the next file before the current track
-  /// ends.
+  /// Gapless: names the next track to queue natively so it starts with no gap.
+  /// Used when the gapless setting is on (otherwise [prewarmNext]). YouTube ids
+  /// only; native ignores a repeat of the already-queued track. Both players
+  /// fetch the next file in the current track's last 25 seconds; Android then
+  /// queues it, iOS never does (see AuvyPlayer.setUpcoming).
   ///
   /// [localPath] builds the next item straight from a downloaded file, so
   /// downloaded albums play gaplessly too.
@@ -352,8 +362,8 @@ class NativeAudioEngine {
   /// A tick carries the player's state as it was when the tick was sent, so one
   /// sent just before a pause or resume can land just after it and undo it for
   /// a moment; an iPhone's ticks also say "not playing" while AVPlayer is
-  /// getting ready to start. Seen 2026-10-17: a pause flipped back to playing
-  /// for 6 ms (the play button, widgets and notification updated three times
+  /// getting ready to start. A pause could flip back to playing for a few
+  /// milliseconds (the play button, widgets and notification updated three times
   /// and a Listen Together host published the flip to every listener), and an
   /// iPhone host published paused, playing within 20 ms at most starts. Until
   /// the player confirms the request (onIsPlayingChanged), or for [windowMs]
@@ -380,8 +390,8 @@ class NativeAudioEngine {
   /// ready (an iPhone fetches the whole file first), and its ticks kept coming.
   /// Read as the new song's, they put its progress bar at the old position
   /// for a moment, could end its loading state early, and a Listen Together
-  /// host published them (seen 2026-10-17: listeners jumped 80 s into the
-  /// next song, then back). A tick that names no song (an older native build,
+  /// host published them (listeners jumped well into the next song, then back).
+  /// A tick that names no song (an older native build,
   /// a source without an id) is kept.
   @visibleForTesting
   static bool isStaleTick(String? tickVideoId, String? expected) =>
@@ -400,8 +410,9 @@ class NativeAudioEngine {
     } catch (_) {/* native player not up yet — nothing cached to clear */}
   }
 
-  /// If the whole track is already in the native play cache, copies it to
-  /// [targetPath] with no network use. Returns {'promoted': bool,
+  /// If the native player holds the whole track (the file it fetched to play it,
+  /// or a stream's play cache), copies it to [targetPath] with no network use.
+  /// The name predates the fetched files. Returns {'promoted': bool,
   /// 'bytes' | 'reason': ...} or null.
   static Future<Map<String, dynamic>?> promoteFromPlayCache(
       String videoId, String targetPath, {int contentLength = 0}) async {
@@ -446,6 +457,43 @@ class NativeAudioEngine {
     }
   }
 
+  /// Whether another app is audible right now. Android answers only once
+  /// Auvy's own output has settled after a pause (its `isMusicActive` counts
+  /// Auvy too); iOS's `isOtherAudioPlaying` never counts Auvy. False when
+  /// unknown, so it never blocks a real press.
+  static Future<bool> otherAppIsPlaying() async {
+    try {
+      return await _call<bool>(Platform.isIOS ? 'isMusicActive' : 'otherAppIsPlaying') ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Android: makes a headset's PAUSE pause and its PLAY play
+  /// (LiteralMediaKeys.java); audio_service alone toggles on either. Needs the
+  /// audio service running, so it is called after AudioService.init. True when
+  /// in place; false on iOS (its remote commands already arrive as play, pause
+  /// and toggle) or if audio_service changed.
+  static Future<bool> useLiteralMediaKeys() async {
+    if (!Platform.isAndroid) return false;
+    try {
+      return await const MethodChannel('auvy/engine').invokeMethod<bool>('installMediaKeys') ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Android: whether Android Auto is projecting right now (AuvyApplication reads
+  /// the car host's connection state). False on iOS and when unknown.
+  static Future<bool> androidAutoConnected() async {
+    if (!Platform.isAndroid) return false;
+    try {
+      return await const MethodChannel('auvy/engine').invokeMethod<bool>('carConnected') ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
   static Future<void> seek(Duration position) async =>
       _call<void>('seek', {'positionMs': position.inMilliseconds});
 
@@ -456,6 +504,25 @@ class NativeAudioEngine {
   /// How loud the music is right now: RMS of the last buffer, 0..1, and 0 when
   /// paused or metering is off.
   static Future<double> getLevel() async => (await _call<num>('getLevel'))?.toDouble() ?? 0;
+
+  /// A song's real waveform: its loudness in [buckets] equal slices, 0..1
+  /// relative to the loudest, decoded from the file being played, or from the
+  /// fetched file of the song named by [videoId] (the next one, fetched ahead),
+  /// with the video id it belongs to. Null while there is no whole file to read
+  /// (the song is still being fetched, or is a stream) or the content is long
+  /// (a podcast).
+  static Future<({String videoId, List<double> peaks})?> waveform({int buckets = 400, String? videoId}) async {
+    // [videoId]: answer only for that song, so a song still loading isn't
+    // mistaken for the one before it, and that one isn't decoded for nothing.
+    final raw = await _call<Map<dynamic, dynamic>>(
+        'waveform', {'buckets': buckets, 'videoId': ?videoId});
+    final peaks = raw?['peaks'];
+    if (peaks is! List || peaks.isEmpty) return null;
+    return (
+      videoId: '${raw!['videoId'] ?? ''}',
+      peaks: [for (final p in peaks) (p as num).toDouble().clamp(0.0, 1.0)],
+    );
+  }
   static Future<void> setSpeed(double speed) async =>
       _call<void>('setSpeed', {'speed': speed});
   static Future<void> setVolume(double volume) async =>

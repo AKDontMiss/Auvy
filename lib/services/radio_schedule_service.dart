@@ -442,7 +442,7 @@ class RadioScheduleService {
     final icy = IcyMetadataService.getCached(song.id);
 
     // A real on-air track if the stream is sending one, otherwise the station
-    // itself. Never a programme name, because we do not have one.
+    // itself. Never a programme name, because there isn't one.
     final live = icy?.streamTitle?.trim();
     final title = (live != null && live.isNotEmpty) ? live : stationName;
 

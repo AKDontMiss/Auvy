@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
@@ -408,7 +409,7 @@ class UpdaterService {
     messenger.showMaterialBanner(
       MaterialBanner(
         // The stock MaterialBanner is reduced to a transparent shell and the
-        // announcement is drawn as our own rounded card below, matching the rest of the
+        // announcement is drawn as Auvy's own rounded card below, matching the rest of the
         // app. `actions` can't be empty, so it gets a zero-size child and the real
         // buttons live inside the card.
         backgroundColor: Colors.transparent,
@@ -553,6 +554,19 @@ class _UpdateDialog extends StatefulWidget {
 class _UpdateDialogState extends State<_UpdateDialog> {
   double _progress = 0;
   bool _isDownloading = false;
+
+  /// Waiting for the first bytes: Auvy's server checks the account and hands
+  /// over GitHub's link, then GitHub starts sending. Shown as "Connecting…" with
+  /// a moving bar, because "Downloading… 0%" there looked frozen.
+  bool _connecting = false;
+  int _received = 0;
+
+  /// The file's size, or 0 when the server didn't say (megabytes are shown then).
+  int _total = 0;
+
+  /// How long the transfer may go without a byte before it counts as stalled.
+  /// The response's own timeout covers only the wait for its headers.
+  static const _kStallAfter = Duration(seconds: 30);
   bool _isDone = false;
   String? _apkPath;
   http.Client? _client;
@@ -563,7 +577,7 @@ class _UpdateDialogState extends State<_UpdateDialog> {
   void _cancelDownload() {
     _cancelled = true;
     try { _client?.close(); } catch (_) {}
-    if (mounted) setState(() { _isDownloading = false; _progress = 0; });
+    if (mounted) setState(() { _isDownloading = false; _connecting = false; _progress = 0; });
   }
 
   @override
@@ -615,7 +629,16 @@ class _UpdateDialogState extends State<_UpdateDialog> {
           color: Colors.red);
       return;
     }
-    setState(() { _isDownloading = true; _progress = 0; });
+    setState(() {
+      _isDownloading = true;
+      _connecting = true;
+      _progress = 0;
+      _received = 0;
+      _total = 0;
+    });
+    // Each step's timing goes to the activity log, so a slow update shows where
+    // the time went. Hosts only: the signed GitHub link carries a token.
+    final watch = Stopwatch()..start();
     try {
       final dir = await getExternalStorageDirectory() ?? await getTemporaryDirectory();
       final path = '${dir.path}/auvy_update.apk';
@@ -641,7 +664,7 @@ class _UpdateDialogState extends State<_UpdateDialog> {
       while (true) {
         final request = http.Request('GET', Uri.parse(url))
           ..followRedirects = false;
-        // Identify ourselves only to our own Worker: the asset route requires an
+        // Identify the app only to Auvy's own Worker: the asset route requires an
         // approved account. The cookie goes in a header, only on the first hop; the next
         // hop is a signed GitHub URL on a different host, and sending a YouTube
         // credential there would be a leak.
@@ -656,6 +679,9 @@ class _UpdateDialogState extends State<_UpdateDialog> {
           onTimeout: () =>
               throw Exception('Download timed out. Check your connection.'),
         );
+        final host = Uri.parse(url).host;
+        logEvent("update: ${host == UpdaterService.updateHost ? "Auvy's server" : host} "
+            'answered ${response.statusCode} after ${watch.elapsedMilliseconds} ms');
         if (response.statusCode < 300 || response.statusCode >= 400) break;
         // Drain the redirect's (empty) body, or the socket stays open for the
         // whole download — five leaked connections per update otherwise.
@@ -681,16 +707,34 @@ class _UpdateDialogState extends State<_UpdateDialog> {
 
       final total = response.contentLength ?? 0;
       int received = 0;
+      // Redrawn when the shown figure changes (a percent, or a megabyte when the
+      // size is unknown), not on every network chunk.
+      int shown = -1;
       final file = File(path);
       final sink = file.openWrite();
 
       try {
-        await for (final chunk in response.stream) {
+        final bytes = response.stream.timeout(_kStallAfter, onTimeout: (events) {
+          events.addError(Exception(
+              'The download stopped. Check your connection and try again.'));
+        });
+        await for (final chunk in bytes) {
           if (_cancelled) return; // user cancelled
+          if (received == 0) {
+            logEvent('update: first bytes after ${watch.elapsedMilliseconds} ms '
+                '(${total > 0 ? '${(total / 1048576).toStringAsFixed(1)} MB' : 'size not given'})');
+          }
           sink.add(chunk);
           received += chunk.length;
-          if (total > 0 && mounted) {
-            setState(() => _progress = received / total);
+          final figure = total > 0 ? received * 100 ~/ total : received >> 20;
+          if (figure != shown && mounted) {
+            shown = figure;
+            setState(() {
+              _connecting = false;
+              _received = received;
+              _total = total;
+              if (total > 0) _progress = received / total;
+            });
           }
         }
       } finally {
@@ -718,12 +762,14 @@ class _UpdateDialogState extends State<_UpdateDialog> {
         throw Exception('That download is not a valid APK');
       }
 
+      logEvent('update: downloaded ${(fileSize / 1048576).toStringAsFixed(1)} MB '
+          'in ${(watch.elapsedMilliseconds / 1000).toStringAsFixed(1)} s');
       if (mounted) setState(() { _isDone = true; _apkPath = path; });
     } catch (e) {
       if (_cancelled) return;
-      print('WARN: update download failed: $e');
+      print('WARN: update download failed after ${watch.elapsedMilliseconds} ms: $e');
       if (mounted) {
-        setState(() { _isDownloading = false; _progress = 0; });
+        setState(() { _isDownloading = false; _connecting = false; _progress = 0; });
         AnimatedToast.show(
           context,
           text: 'Download failed: ${e.toString().replaceAll('Exception: ', '')}',
@@ -931,10 +977,15 @@ class _UpdateDialogState extends State<_UpdateDialog> {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text('Downloading…',
+                      Text(_connecting ? 'Connecting…' : 'Downloading…',
                           style: TextStyle(
                               color: tc, fontWeight: FontWeight.w800, fontSize: 13.5)),
-                      Text('${(_progress * 100).toStringAsFixed(0)}%',
+                      Text(
+                          _connecting
+                              ? ''
+                              : _total > 0
+                                  ? '${(_progress * 100).toStringAsFixed(0)}%'
+                                  : '${(_received / 1048576).toStringAsFixed(1)} MB',
                           style: const TextStyle(
                               color: Colors.white,
                               fontWeight: FontWeight.w900,
@@ -945,7 +996,8 @@ class _UpdateDialogState extends State<_UpdateDialog> {
                   ClipRRect(
                     borderRadius: BorderRadius.circular(8),
                     child: LinearProgressIndicator(
-                      value: _progress,
+                      // Moving, not empty, until there is a share to show.
+                      value: _connecting || _total <= 0 ? null : _progress,
                       minHeight: 7,
                       backgroundColor: Colors.black45,
                       valueColor: AlwaysStoppedAnimation(tc),

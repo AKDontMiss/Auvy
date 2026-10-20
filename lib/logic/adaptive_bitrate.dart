@@ -22,10 +22,10 @@ const int kNoEstimate = -1;
 
 /// Above this, the "measured throughput" did not come from the network.
 ///
-/// The player's bandwidth meter also counts reads from downloaded files and the
-/// play cache, which report hundreds of Mbps. Such readings say nothing about the
-/// network, so they are treated as "no estimate". 40 Mbps is far above anything
-/// audio needs and far below a disk read.
+/// The player's bandwidth meter can also count reads from files on the phone
+/// and the play cache, which report hundreds of Mbps. Such readings say nothing
+/// about the network, so they are treated as "no estimate". 40 Mbps is far
+/// above anything audio needs and far below a disk read.
 const int kImplausibleEstimate = 40000000;
 
 /// Required throughput margin over a format's bitrate before choosing it, since

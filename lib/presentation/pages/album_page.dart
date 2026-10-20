@@ -442,7 +442,7 @@ class _AlbumPageState extends ConsumerState<AlbumPage> {
             widget.album.title.trim().toLowerCase() ==
                 widget.fallbackTrack!.title.trim().toLowerCase());
     // When opened from a track (not a genuine single), tell the resolver which
-    // track we came from so it can reject a wrong same-artists album.
+    // track it was opened from so it can reject a wrong same-artists album.
     final expectTitle = (!isSingle && widget.fallbackTrack != null)
         ? widget.fallbackTrack!.title
         : '';
@@ -629,7 +629,7 @@ class _AlbumPageState extends ConsumerState<AlbumPage> {
                                           // year the browse header stamped onto the fetched
                                           // tracks (fixes "Unknown" when opened from the player
                                           // title tap, which has no year to hand). _AlbumMetaLine
-                                          // then upgrades whatever we have to the EXACT release
+                                          // then upgrades whatever is known to the EXACT release
                                           // day via the first track's player microformat.
                                           final passed = widget.album.releaseDate;
                                           final valid = passed.isNotEmpty && passed != 'Unknown Date' && passed != 'Unknown';

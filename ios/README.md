@@ -12,7 +12,7 @@ To install it on a phone, see [INSTALL.md](../docs/INSTALL.md).
 | File | Channel | What it does |
 | --- | --- | --- |
 | `AuvyPlayer.swift` | `com.auvy.app/native_player` | Playback. Fetches each track to a file (the next one before the current track ends), repairs it if needed, and plays it with AVQueuePlayer. Reports position, state and track ends to Dart. |
-| `AuvyStreamLoader.swift` | (used by the player) | Downloads stream audio in small byte ranges and asks Dart for a fresh URL if one expires mid-download (the counterpart of Android's resolving data source in `NativePlayerManager.kt`). |
+| `AuvyStreamLoader.swift` | (used by the player) | Downloads stream audio in small byte ranges and asks Dart for a fresh URL if one expires mid-download (the counterpart of Android's `TrackFetcher.kt`, which fetches each song whole the same way). |
 | `AuvyMP4Repair.swift` | (used by the player) | Fixes the duration of YouTube's fragmented MP4 audio, which iOS otherwise reads as twice its real length. |
 | `AuvyCookies.swift` | `com.auvy.app/cookies` | YouTube sign-in in a WKWebView, and reading the session cookies (including HttpOnly ones). |
 | `AuvySystemChannels.swift` | the small channels | Haptics, toasts, region, screen flags, app icon, backup files, the Files app, audio output, the wake-up alarm (AlarmKit), refresh reminders, What's New, WebP encoding for custom covers (Google's libwebp, a CocoaPods dependency: iOS can read WebP but not write it), and honest "not available" answers for Android-only features. |
@@ -144,7 +144,7 @@ its backend.
 ## Packaging for SideStore
 
 ```sh
-./tool/release_ios.sh 1.4.1    # -> build/sideload/app-release.ipa + source.json
+./tool/release_ios.sh 1.4.2    # -> build/sideload/app-release.ipa + source.json
 ```
 
 It builds the committed code (commit first) in a neutral folder, because

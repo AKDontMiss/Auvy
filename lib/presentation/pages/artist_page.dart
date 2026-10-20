@@ -35,7 +35,7 @@ class ArtistPage extends ConsumerWidget {
 
   void _shareArtist(BuildContext context, WidgetRef ref) {
     final themeColor = ref.read(themeProvider);
-    // The `artist` Song we were opened with often carries an EMPTY or stale
+    // The `artist` Song this page was opened with often carries an EMPTY or stale
     // image (e.g. an artist row tapped from search). The page header shows the
     // RESOLVED profile picture from the artist provider (`data.image`) — the
     // postcard must use that same resolved art/name, or it renders the empty

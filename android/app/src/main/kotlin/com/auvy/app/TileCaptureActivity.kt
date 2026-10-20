@@ -49,7 +49,7 @@ class TileCaptureActivity : Activity() {
             grantResults.isNotEmpty() &&
             grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED
         ) {
-            // Granted just now, and we are still foreground — capture immediately
+            // Granted just now, and the activity is still in the foreground — capture immediately
             // rather than making them tap the tile a second time.
             startCapture()
         }

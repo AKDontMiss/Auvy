@@ -22,7 +22,7 @@ enum AudiobookSort {
 /// LibriVox volunteers record works whose copyright has expired and release
 /// the recordings into the public domain, so nothing is redistributed against
 /// its terms. The Internet Archive hosts that audio (`collection:librivoxaudio`,
-/// about 21,600 books, 18,900 in English, measured 2026-10-02) and is used for
+/// over 20,000 books, most in English) and is used for
 /// both the catalogue and the chapter files. The Archive's larger "community
 /// audiobooks" collection is user uploads, much of it under copyright, so it
 /// is not used.

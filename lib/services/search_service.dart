@@ -87,7 +87,7 @@ class SearchService {
       if (continuationToken != null) {
         rawResponse = await _innerTubeClient.searchContinuation(continuationToken);
       } else {
-        // Send the scope filter so we get the correct result type (was computed
+        // Send the scope filter so the correct result type comes back (was computed
         // but never passed before — the cause of mixed/incorrect search hits).
         rawResponse = await _innerTubeClient.search(query, params: _getParamForScope(scope));
       }
@@ -727,7 +727,7 @@ class SearchService {
       final needle = title.toLowerCase().trim();
       final artistNeedle = artist.trim().toLowerCase();
       String strip(String id) => id.replaceFirst('album_', '');
-      // A candidate must be by the right artist when we know one; title-only matching
+      // A candidate must be by the right artist when one is known; title-only matching
       // found same-named albums by other artists (covers, karaoke, tributes). Rows
       // without an artist aren't rejected, and multi-artist credits pass via the
       // containment check.
@@ -980,7 +980,7 @@ class SearchService {
 
     try {
       // 1) Track search — the row that IS this track links the real artist. Read
-      //    the credited artist channel whose NAME matches the one we tapped.
+      //    the credited artist channel whose NAME matches the one tapped.
       if (t.isNotEmpty) {
         final q = a.isNotEmpty ? '$t $a' : t;
         final res = await executeScopedSearch(q, scope: SearchContextScope.tracks);
@@ -1055,7 +1055,7 @@ class SearchService {
       final viaTrack = await resolveAlbumIdForTrack(albumTitle, artist);
       if (viaTrack != null && _isAlbumBrowseId(viaTrack)) result = await getAlbumTracks(viaTrack);
     }
-    // Still nothing, but we came from a known track whose title differs from
+    // Still nothing, but this came from a known track whose title differs from
     // `albumTitle`. That happens when `albumTitle` is really a playlist or context
     // name (e.g. "Favorite Songs") attached to the queued song. Recover the real
     // album from the track title; resolveAlbumIdForTrack only returns a real
@@ -1070,7 +1070,7 @@ class SearchService {
       }
     }
 
-    // GUARD (#11): we opened an album — usually straight off the track's own
+    // GUARD (#11): the album opened — usually straight off the track's own
     // albumId — that does NOT contain the tapped track. That means the track's
     // metadata pointed at the wrong record (a collab album the same artists both
     // appear on, e.g. "Real Nigga"). Re-resolve from the TRACK itself and prefer
@@ -1600,7 +1600,7 @@ class SearchService {
         return '${url.substring(0, match.start)}=$_sourceSizeParam';
       }
       // No size param found — URL-safe base64 IDs never contain '='
-      // so we can safely append directly.
+      // so it is safe to append directly.
       return '${url.trimRight()}=$_sourceSizeParam';
     }
 

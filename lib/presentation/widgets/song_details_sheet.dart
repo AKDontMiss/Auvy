@@ -424,7 +424,7 @@ class _TrackInfoGroupState extends ConsumerState<_TrackInfoGroup> {
   void initState() {
     super.initState();
     _release = widget.initialRelease;
-    // Enrich when there's nothing at all AND when all we have is a year — the
+    // Enrich when there's nothing at all AND when all there is is a year — the
     // whole point is to show the actual day, not just "2019".
     if (_release == null || _isYearOnly(_release)) _enrichRelease();
   }
@@ -450,7 +450,7 @@ class _TrackInfoGroupState extends ConsumerState<_TrackInfoGroup> {
         }
       } catch (_) {}
     }
-    // Nothing exact available — keep a year we already had rather than
+    // Nothing exact available — keep the year already known rather than
     // re-searching for the same thing.
     if (_release != null) return;
 

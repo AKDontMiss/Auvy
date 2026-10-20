@@ -224,7 +224,7 @@ class LoginActivity : Activity() {
     /// Skip the identifier ("Enter your email") step for the account the user
     /// already picked in the NATIVE device chooser. Google carries `Email=`
     /// into v3/signin/identifier but still renders the page waiting for a Next
-    /// tap (and doesn't always prefill the field), so fill it ourselves and
+    /// tap (and doesn't always prefill the field), so it is filled in here and
     /// click Next, landing directly on the password/passkey step. The retry
     /// loop covers the JS app rendering the input a beat after page-finished.
     private fun maybeAutoAdvanceIdentifier(url: String) {
@@ -263,7 +263,7 @@ class LoginActivity : Activity() {
     /// user on WWW.youtube.com instead of continuing to music.youtube.com —
     /// so waiting for a music.youtube.com URL stranded users on the YouTube
     /// home page while ALREADY signed in. Treat ANY youtube.com page as a
-    /// checkpoint: the moment the shared session cookie exists, we're done.
+    /// checkpoint: the moment the shared session cookie exists, sign-in is done.
     private fun maybeFinish(url: String) {
         val onMusicHost = url.startsWith("https://music.youtube.com") ||
             url.startsWith("https://www.youtube.com") ||

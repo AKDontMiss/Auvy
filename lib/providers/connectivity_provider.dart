@@ -63,7 +63,7 @@ class ConnectivityState {
   bool get isOffline => !isConnected || isInOfflineMode;
   bool get hasInternet => isConnected && !isInOfflineMode;
 
-  // Helper: Should we preload?
+  // Helper: preload now?
   bool get shouldPreload {
     if (isOffline) return false; // Don't preload offline
     if (dataSaverMode == DataSaverMode.always) return false;
@@ -71,7 +71,7 @@ class ConnectivityState {
     return true;
   }
 
-  // Helper: Should we load high-res images?
+  // Helper: load high-res images?
   bool get shouldLoadHighResImages {
     if (isOffline) return false;
     if (dataSaverMode == DataSaverMode.always) return false;
@@ -86,7 +86,7 @@ class ConnectivityState {
     return false;
   }
 
-  // Should we reduce search results?
+  // How many search results to fetch.
   int get maxSearchResults {
     if (isOffline) return 0; // No search offline
     if (dataSaverMode == DataSaverMode.always) return 8;
@@ -108,7 +108,7 @@ class ConnectivityState {
     return 0;
   }
 
-  // Should we reduce home feed sections?
+  // How many home feed sections to build.
   int get maxHomeSections {
     if (isOffline) return 0; // No feed offline
     if (dataSaverMode == DataSaverMode.always) return 30;
@@ -195,8 +195,8 @@ class ConnectivityNotifier extends StateNotifier<ConnectivityState> {
       if (!mounted) return;
       if (!isConnected) {
         // Going offline counts only if it lasts: the platform often reports "no
-        // network" for a moment (seen on iOS 21 times in a day, each
-        // "Gone offline" and "Back online" in the same millisecond), and each
+        // network" for a moment (on iOS often, "Gone offline" and "Back online"
+        // in the same millisecond), and each
         // flip told every offline-aware part of the app to stand down.
         _offlineTimer?.cancel();
         _offlineTimer = Timer(offlineGrace, () {

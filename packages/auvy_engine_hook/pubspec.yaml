@@ -1,0 +1,22 @@
+name: auvy_engine_hook
+description: >-
+  Reports every Flutter engine the Android app starts (audio_service's
+  background one included) to the app's Application, so the app can give each
+  engine its own channels. Part of Auvy; not published.
+version: 1.0.0
+publish_to: none
+
+environment:
+  sdk: ^3.11.0
+  flutter: '>=3.3.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: com.auvy.enginehook
+        pluginClass: AuvyEngineHookPlugin

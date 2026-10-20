@@ -390,3 +390,77 @@ private let auvyTapProcess: MTAudioProcessingTapProcessCallback = {
         .takeUnretainedValue()
     context.process(UnsafeMutableAudioBufferListPointer(bufferList), frames: Int(framesOut.pointee))
 }
+
+/// The real waveform of a track for the player's waveform slider: its loudness
+/// (RMS) in `buckets` equal slices, each 0...1 relative to the loudest slice.
+///
+/// Read from the file the player is playing, decoded off the main thread at a
+/// low sample rate (mono, 8 kHz is plenty for slices a couple of seconds long).
+/// Nil for anything that is not a local file or runs longer than 20 minutes (a
+/// podcast or audiobook takes long to decode, and a waveform says little there).
+enum AuvyWaveform {
+
+    /// Bumped by every waveform request; a decode for an older one stops.
+    static let requests = AuvyWaveformCounter()
+
+    /// [superseded] is checked as it goes: once a newer request has replaced this
+    /// one, it stops and answers nil rather than finish for nothing.
+    static func decode(url: URL, buckets: Int, superseded: () -> Bool = { false }) -> [Double]? {
+        guard url.isFileURL, buckets > 0, !superseded() else { return nil }
+        let asset = AVURLAsset(url: url)
+        let seconds = CMTimeGetSeconds(asset.duration)
+        guard seconds.isFinite, seconds > 0, seconds <= 20 * 60,
+              let track = asset.tracks(withMediaType: .audio).first,
+              let reader = try? AVAssetReader(asset: asset) else { return nil }
+        let rate = 8000.0
+        let output = AVAssetReaderTrackOutput(track: track, outputSettings: [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsFloatKey: false,
+            AVLinearPCMIsBigEndianKey: false,
+            AVLinearPCMIsNonInterleaved: false,
+            AVNumberOfChannelsKey: 1,
+            AVSampleRateKey: rate,
+        ])
+        guard reader.canAdd(output) else { return nil }
+        reader.add(output)
+        guard reader.startReading() else { return nil }
+
+        let total = max(1, Int(seconds * rate))
+        var sums = [Double](repeating: 0, count: buckets)
+        var counts = [Int](repeating: 0, count: buckets)
+        var index = 0
+        var samples = [Int16]()
+        while let buffer = output.copyNextSampleBuffer() {
+            if superseded() { reader.cancelReading(); return nil }
+            guard let block = CMSampleBufferGetDataBuffer(buffer) else { continue }
+            let length = CMBlockBufferGetDataLength(block)
+            let count = length / MemoryLayout<Int16>.size
+            if count == 0 { continue }
+            if samples.count < count { samples = [Int16](repeating: 0, count: count) }
+            let copied = samples.withUnsafeMutableBytes { raw in
+                CMBlockBufferCopyDataBytes(block, atOffset: 0, dataLength: count * 2, destination: raw.baseAddress!)
+            }
+            guard copied == kCMBlockBufferNoErr else { continue }
+            for i in 0..<count {
+                let b = min(index * buckets / total, buckets - 1)
+                let v = Double(samples[i]) / 32768.0
+                sums[b] += v * v
+                counts[b] += 1
+                index += 1
+            }
+        }
+        guard reader.status == .completed else { return nil }
+        let rms = (0..<buckets).map { counts[$0] > 0 ? (sums[$0] / Double(counts[$0])).squareRoot() : 0 }
+        guard let loudest = rms.max(), loudest > 0 else { return nil }
+        return rms.map { $0 / loudest }
+    }
+}
+
+/// A counter read from the decode's background thread and bumped on the main one.
+final class AuvyWaveformCounter {
+    private let lock = NSLock()
+    private var count = 0
+    var value: Int { lock.lock(); defer { lock.unlock() }; return count }
+    func increment() { lock.lock(); count += 1; lock.unlock() }
+}

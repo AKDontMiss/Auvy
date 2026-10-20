@@ -30,7 +30,11 @@ echo "building $(git rev-parse --short HEAD) in $WT"
 # What git doesn't carry: the build's keys.
 [[ -f .env ]] && cp .env "$WT/.env"
 
-( cd "$WT" && ./tool/build_ios.sh release && ./tool/package_sideload_ipa.sh "$VERSION" )
+# Built unsigned: the packaging signs every bundle ad hoc anyway (no team, no
+# certificate), so a release needs no Apple account at all. Signing the build
+# with the project's team would also fail: the ids the app ships under
+# (com.auvy.app and its widget) can't be registered to that team.
+( cd "$WT" && ./tool/build_ios.sh release --no-codesign && ./tool/package_sideload_ipa.sh "$VERSION" )
 
 mkdir -p build/sideload
 cp "$WT/build/sideload/app-release.ipa" "$WT/build/sideload/source.json" build/sideload/

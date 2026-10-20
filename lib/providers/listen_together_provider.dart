@@ -330,7 +330,7 @@ class ListenTogetherNotifier extends StateNotifier<ListenTogetherState> {
   static const String _kOutputLatency = 'lt_output_latency_ms';
 
   /// Re-read the route and adopt its latency. Cheap, and called when a session
-  /// starts and whenever the output device changes under us.
+  /// starts and whenever the output device changes underneath it.
   Future<void> _refreshOutputLatency() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -399,14 +399,14 @@ class ListenTogetherNotifier extends StateNotifier<ListenTogetherState> {
   static const int _driftReportEvery = 30;
 
   // Host liveness, measured without comparing two phones' clocks
-  /// The last heartbeat VALUE seen from the host, and when we saw it CHANGE by
-  /// our own clock. Staleness means "this number stopped moving", never "their
+  /// The last heartbeat VALUE seen from the host, and when it was seen to CHANGE
+  /// by this device's own clock. Staleness means "this number stopped moving", never "their
   /// number is far from my now". See the note in _watchMembers.
   int _lastHostSeenValue = -1;
   int _lastHostSeenAtLocalMs = 0;
   int _hostStaleStrikes = 0;
 
-  /// When our own position value last moved, so drift is measured against an
+  /// When this device's own position value last moved, so drift is measured against an
   /// interpolated playhead rather than a value up to ~500 ms old. See
   /// [_livePositionMs].
   /// Debounces a guest request against itself. See _onGuestPlayerState.
@@ -449,7 +449,7 @@ class ListenTogetherNotifier extends StateNotifier<ListenTogetherState> {
   /// At a track that ended, every listener's mirrored queue starts the same next
   /// song at the same moment as the host, so they are usually staged before
   /// their report can arrive. Holding then paused a session that was already in
-  /// sync: seen 2026-10-17 at every song change, the host paused 0.8 s in and
+  /// sync: at every song change the host paused just under a second in and
   /// waited out the whole barrier, because the listener only reported when the
   /// room had to switch its track. This long a wait is allowed for the report
   /// before the host holds; a listener whose queue differed is still held for.
@@ -459,7 +459,7 @@ class ListenTogetherNotifier extends StateNotifier<ListenTogetherState> {
   /// per track.
   String? _reportedReadyFor;
 
-  /// Until when our OWN player changes are the room's doing, not the user's.
+  /// Until when this device's OWN player changes are the room's doing, not the user's.
   /// See _onGuestPlayerState.
   int _suppressGuestEchoUntilMs = 0;
   int _positionSeenAtLocalMs = 0;
@@ -910,7 +910,7 @@ class ListenTogetherNotifier extends StateNotifier<ListenTogetherState> {
     // time, speed), so a push is only news when the host's real playback leaves
     // that projection. The heartbeat used to run every 4 s regardless: 900 room
     // writes an hour, each read by every guest, about 6% of the free tier's
-    // daily writes per hour of a two-phone session (2026-10-17). The departure
+    // daily writes per hour of a two-phone session. The departure
     // check now uses the smoothed live position (accurate to tens of ms, not
     // the half-second feed), so it can fire at 250 ms instead of 2 s, well
     // inside what guests nudge out gently.
@@ -1004,8 +1004,8 @@ class ListenTogetherNotifier extends StateNotifier<ListenTogetherState> {
     // While a schedule is in flight the host is in its old state on purpose,
     // and acting on it seeks before starting: not news. The schedule says what
     // happens, and its apply publishes the result. Published, the gap read as a
-    // pause between the schedule and its instant (seen 2026-10-17: listeners
-    // paused and resumed 40 ms apart right after a scheduled start).
+    // pause between the schedule and its instant (listeners paused and resumed
+    // a few milliseconds apart right after a scheduled start).
     final scheduleInFlight = _executingSchedule || _hasPendingExec;
     final material = songChanged ||
         (s.isPlaying != _lastPushedPlaying && !scheduleInFlight);
@@ -1059,7 +1059,7 @@ class ListenTogetherNotifier extends StateNotifier<ListenTogetherState> {
     return candidates.isEmpty ? null : candidates.first.uid;
   }
 
-  /// Guest side: has the host stopped stamping, and am I the one to take over?
+  /// Guest side: has the host stopped stamping, and should this device take over?
   void _checkHostAlive() {
     if (state.role != LtRole.guest) return;
     if (_room == null) return;
@@ -1071,14 +1071,14 @@ class ListenTogetherNotifier extends StateNotifier<ListenTogetherState> {
     // "gone" would hijack a live session, so it is treated as alive and the old
     // liveness watchdog stays in charge of it.
     if (seen <= 0) return;
-    // If this device is offline, the host isn't the one who went missing: our own
+    // If this device is offline, the host isn't the one who went missing: this device's
     // outage also produces stale stamps, and a claim is a write that can't succeed
     // offline anyway. A reconnect brings a fresh snapshot and the check runs again.
     if (!_ref.read(connectivityProvider).hasInternet) return;
     final age = _nowServerMs() - seen;
     // A future-dated stamp means the clocks disagree, NOT that the host is
     // IMMORTAL. Both devices estimate the server clock independently (each can be
-    // tens to hundreds of ms off), so a stamp can land slightly ahead of our own
+    // tens to hundreds of ms off), so a stamp can land slightly ahead of this device's
     // "now". Negative ages are simply not stale; what
     // matters is that they never wrap into looking stale either.
     if (age < _hostGoneMs) return;
@@ -1124,7 +1124,7 @@ class ListenTogetherNotifier extends StateNotifier<ListenTogetherState> {
         // Adopt what the server says, win OR lose.
         //
         // This read is the most authoritative stamp there is, and the caller's
-        // own copy is what sent us here. Recording it means a decline actually
+        // own copy is what led here. Recording it means a decline actually
         // teaches the liveness check something instead of leaving it to reach
         // the same wrong conclusion on the next tick.
         if (seen > _hostSeenObserved) _hostSeenObserved = seen;
@@ -1374,8 +1374,8 @@ class ListenTogetherNotifier extends StateNotifier<ListenTogetherState> {
     // published position, so it goes out as 0 at an instant that far ahead (a
     // guest's projection never runs below 0). "0 now" put listeners a Bluetooth
     // delay ahead of the host at every song change, and 180 ms is inside the
-    // departure check, so it stood until the next keepalive (seen 2026-10-17:
-    // 255 ms ahead at each start, then an overshoot the other way).
+    // departure check, so it stood until the next keepalive (a quarter of a
+    // second ahead at each start, then an overshoot the other way).
     final heardInMs = readingIsCurrent ? 0 : _outputLatencyMs;
     _rev++;
     _lastPushedSongId = s.currentSong?.id;
@@ -1517,9 +1517,9 @@ class ListenTogetherNotifier extends StateNotifier<ListenTogetherState> {
     }
     if (s.isLoading) return;
     // A schedule is about to change this device's state by design. Read as the
-    // user's doing, the gap sent the opposite request (seen 2026-10-17: the
-    // room's pause arrived 34 ms before this device's instant, the listener
-    // asked to play, and the host resumed everyone).
+    // user's doing, the gap sent the opposite request (the room's pause arrived
+    // just before this device's instant, the listener asked to play, and the
+    // host resumed everyone).
     if (_hasPendingExec) return;
     // Not on the session's song (loading one of its own, or not switched yet):
     // what it does now is not about the room's track.
@@ -1530,7 +1530,7 @@ class ListenTogetherNotifier extends StateNotifier<ListenTogetherState> {
     // A listener's other actions are requests too: a scrub becomes a 'seek' request
     // (the host already handles it), and speed, pitch and the A-B loop are sent the
     // same way.
-    // Compare against our own previous reading (moved on by the time since), not the
+    // Compare against this device's previous reading (moved on by the time since), not the
     // room's position: a scrub is an instant multi-second step, while drift
     // accumulates slowly and never steps. Mistaking drift for intent would move
     // everyone to this device's wrong position. A jump only counts within one track
@@ -1545,7 +1545,7 @@ class ListenTogetherNotifier extends StateNotifier<ListenTogetherState> {
 
     // Speed, pitch and loop: discrete settings, so any difference from the
     // room's is this listener changing it. The `_nudging` guard is essential —
-    // during a drift correction our speed is deliberately off the shared value,
+    // during a drift correction this device's speed is deliberately off the shared value,
     // and without it every correction would be broadcast as a speed change.
     if (!_nudging) {
       final shared = _sharedSpeed();
@@ -1596,7 +1596,7 @@ class ListenTogetherNotifier extends StateNotifier<ListenTogetherState> {
     return (rs - ms).abs() > 50 || (re - me).abs() > 50;
   }
 
-  /// Ignore our own player changes for a moment. See [_onGuestPlayerState].
+  /// Ignore this device's own player changes for a moment. See [_onGuestPlayerState].
   void _suppressEcho([int ms = 1500]) {
     _suppressGuestEchoUntilMs = DateTime.now().millisecondsSinceEpoch + ms;
   }
@@ -1634,7 +1634,7 @@ class ListenTogetherNotifier extends StateNotifier<ListenTogetherState> {
 
       final rev = data['rev'];
       if (rev is! int || rev <= _rev) return; // stale/duplicate snapshot
-      // A graceful handover names us directly — take over now rather than
+      // A graceful handover names this device directly — take over now rather than
       // waiting out _hostGoneMs.
       if (data['hostId'] == _uid) {
         _promoteToHost();
@@ -1802,9 +1802,9 @@ class ListenTogetherNotifier extends StateNotifier<ListenTogetherState> {
   /// Whether the room's own projection has run past the end of its song: the
   /// host moved on, or went away, without saying so (closed at a song's end,
   /// say). This device's mirrored queue has moved on as the host's would, and
-  /// being pulled back put it on the finished song from 0:00 (seen 2026-10-17:
-  /// the room's target 4:01 on a 4:00 song, the listener replaying it until a
-  /// takeover 70 s later). It stays where it is until the room says more.
+  /// being pulled back put it on the finished song from 0:00 (a target past the
+  /// song's end, and the listener replaying it until a takeover). It stays where
+  /// it is until the room says more.
   bool _roomSongIsOver() {
     final data = _room;
     if (data == null || data['isPlaying'] != true) return false;
@@ -1837,8 +1837,8 @@ class ListenTogetherNotifier extends StateNotifier<ListenTogetherState> {
     // Paused, the playhead stands where it stopped: the last reading moved on
     // by the time between it and the pause, measured when the pause happened.
     // Projected from the reading as if still playing, a pause went out up to
-    // 0.5 s early and the resume 0.6 s late (seen 2026-10-17: paused at 33588,
-    // resumed at 34288 with nothing played between). A reading since the pause
+    // half a second early and the resume as late (nothing played between them).
+    // A reading since the pause
     // (a seek while paused) is newer than that and is used as it is.
     if (!_ref.read(playerProvider).isPlaying) {
       return _pausedAtSeenMs == _positionSeenAtLocalMs && _pausedPosMs >= 0
@@ -1892,8 +1892,8 @@ class ListenTogetherNotifier extends StateNotifier<ListenTogetherState> {
       } else if (!_wasPlaying && s.isPlaying && _positionSeenAtLocalMs > 0) {
         // Resumed: it moves on from where it stood, from now. Counted from the
         // last reading, which came in before the pause, the time spent paused
-        // was added (seen 2026-10-17: a start at 75 ms published as 672, and
-        // listeners nudged 100-300 ms after most scheduled starts).
+        // was added (a start published over half a second late, and listeners
+        // nudged after most scheduled starts).
         final stood = _pausedAtSeenMs == _positionSeenAtLocalMs && _pausedPosMs >= 0
             ? _pausedPosMs
             : currentPositionProvider.value.inMilliseconds;
@@ -2168,7 +2168,7 @@ class ListenTogetherNotifier extends StateNotifier<ListenTogetherState> {
           // than trusting each of them to.
           _appliedNudgeSpeed = 0;
           // Captured BEFORE the first stretch, and only then: after that
-          // `ps.speed` is our own nudged value, so re-reading it would ratchet
+          // `ps.speed` is this device's own nudged value, so re-reading it would ratchet
           // the base upward every tick.
           _preNudgeSpeed = ps.speed;
         }
@@ -2316,7 +2316,7 @@ class ListenTogetherNotifier extends StateNotifier<ListenTogetherState> {
       } else {
         // The host vanished without ending the session (app killed, network died): its
         // heartbeat stops advancing. Staleness is measured without comparing two phones'
-        // clocks: remember the last heartbeat value seen and how long ago (by our local
+        // clocks: remember the last heartbeat value seen and how long ago (by the local
         // clock) it changed. A live host advances it at least every 25 s. Two consecutive stale
         // observations are required so one slow snapshot can't end a session.
         LtMember? host;
@@ -2344,7 +2344,7 @@ class ListenTogetherNotifier extends StateNotifier<ListenTogetherState> {
           }
           if (_prevMemberCount > 0 && ++_hostRowMisses >= 2) {
             print('LT guest: no host row in two server snapshots — taking over');
-            // Do NOT end the session: if anyone is still here, one of us should
+            // Do NOT end the session: if anyone is still here, one of them should
             // carry it on. _claimHost declines when the room is not abandoned.
             _claimHost();
           }
@@ -2358,12 +2358,12 @@ class ListenTogetherNotifier extends StateNotifier<ListenTogetherState> {
           _hostStaleStrikes = 0;
         } else if (_lastHostSeenAtLocalMs > 0 &&
             nowLocal - _lastHostSeenAtLocalMs > 90000) {
-          // Our own outage isn't the host going quiet: both look like "no fresh snapshot".
+          // This device's own outage isn't the host going quiet: both look like "no fresh snapshot".
           // While offline there's no evidence either way, so hold rather than hang up; the
           // next snapshot after reconnecting settles it.
           if (!_ref.read(connectivityProvider).hasInternet) {
             // Rebased, so reconnecting does not immediately trip the 90 s test on
-            // a gap that was ours.
+            // a gap that was this device's own.
             _lastHostSeenAtLocalMs = nowLocal;
             _hostStaleStrikes = 0;
             return;
@@ -2418,7 +2418,7 @@ class ListenTogetherNotifier extends StateNotifier<ListenTogetherState> {
     });
   }
 
-  /// Step down after the room stopped accepting our host writes.
+  /// Step down after the room stopped accepting this device's host writes.
   ///
   /// Only on a permission failure. A network error must NOT demote — being
   /// offline is not evidence that anything changed, and a host that resigned
@@ -2570,8 +2570,8 @@ class ListenTogetherNotifier extends StateNotifier<ListenTogetherState> {
         '(value=${payload['valueMs']}, to=${payload['toIndex']})');
     // mergeFields, not merge: a merge is deep, so any field this request lacks
     // kept the previous request's value. A plain pause inherited a 4-minute-old
-    // execAtMs and another song's trackId (seen 2026-10-17: the host applied it
-    // "239173ms LATE", and once resumed everyone against the user's pause).
+    // execAtMs and another song's trackId (the host applied it minutes late, and
+    // once resumed everyone against the user's pause).
     ref
         .set({'request': payload}, SetOptions(mergeFields: ['request']))
         .catchError((Object e) {
@@ -2666,8 +2666,8 @@ class ListenTogetherNotifier extends StateNotifier<ListenTogetherState> {
   /// A listener opening a song or episode anywhere in the app (see
   /// [PlayerNotifier.listenerPick]). Played locally, it was pulled straight
   /// back to the session's song, and the state changes on the way were sent as
-  /// requests (seen 2026-10-17: an episode opened three times, the session's
-  /// song moved to 0:00 each time). Like a tap in the queue, it goes to the host.
+  /// requests (an episode opened three times, the session's song moved to 0:00
+  /// each time). Like a tap in the queue, it goes to the host.
   bool _onListenerPick(Song song) {
     if (!requestPlayTrack(song)) return false;
     AnimatedToast.message(
@@ -2709,7 +2709,7 @@ class ListenTogetherNotifier extends StateNotifier<ListenTogetherState> {
   /// host holds the new track paused until every present member has reported
   /// (or [_bufferBarrierMs] passes, so one stuck device can't hold the session),
   /// so everyone starts together. Same idea as Metrolist's BUFFER_READY /
-  /// BUFFER_WAIT handshake, on the relay we already have.
+  /// BUFFER_WAIT handshake, on the relay already in use.
   static const int _bufferBarrierMs = 4000;
 
   void _reportReady(String songId) {
@@ -2756,8 +2756,8 @@ class ListenTogetherNotifier extends StateNotifier<ListenTogetherState> {
     // One skip at a time: the next waits until the host's track has changed (or
     // 4 s, so a lost request never jams it). The guest's screen can't move until
     // the host answers, so taps used to pile up unseen and each one skipped
-    // another song (seen 2026-10-17: five "next" in seven seconds, owner: "a bit
-    // glitchy when controlling"). The listener is told why nothing moved yet.
+    // another song (several "next" in a few seconds). The listener is told why
+    // nothing moved yet.
     final roomTrack = _room?['track'];
     final roomTrackId = roomTrack is Map ? roomTrack['id']?.toString() : null;
     final host = state.hostName ?? 'the host';
@@ -2833,8 +2833,8 @@ class ListenTogetherNotifier extends StateNotifier<ListenTogetherState> {
             if (reqSongId != null && reqSongId != hostSongId) {
               // Measured on another song: only the play state applies, and the
               // apply publishes the host's own position. Publishing the
-              // listener's put everyone at that song's position (seen
-              // 2026-10-17: "rockstar" went from 2:13 to 0:00).
+              // listener's put everyone at that song's position (a song well under way
+              // went back to 0:00).
               continue;
             }
             _publishSchedule(
@@ -2975,7 +2975,7 @@ class ListenTogetherNotifier extends StateNotifier<ListenTogetherState> {
     _forgetSession();
     _teardown();
     state = state.copyWith(clearSession: true, notice: message);
-    // Best-effort: remove our presence doc so the roster doesn't show ghosts.
+    // Best-effort: remove this device's presence doc so the roster doesn't show ghosts.
     if (code != null && uid != null) {
       _roomRef(code).collection('members').doc(uid).delete().catchError((_) {});
     }

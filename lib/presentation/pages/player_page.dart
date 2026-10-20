@@ -351,7 +351,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with TickerProviderStat
       return;
     }
     // No linked channel id on the track → resolve the SPECIFIC artist behind
-    // THIS song (its title + name) so we open the right one when several artists
+    // THIS song (its title + name) so the right one opens when several artists
     // share a name (e.g. two "Xenia"s), instead of trusting the first name hit.
     final svc = ref.read(searchServiceProvider);
     final resolvedId =
@@ -1158,8 +1158,15 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with TickerProviderStat
                   );
                   break;
                 case SliderStyle.waveform:
-                  // Same SoundCloud-style bar waveform as the settings preview.
-                  activeSlider = WaveformSlider(progress: progress, themeColor: themeColor, onChanged: _onSeekScrub);
+                  // The song's own waveform (TrackWaveform), not a drawn pattern.
+                  activeSlider = TrackWaveformSlider(
+                    songId: song.id,
+                    progress: progress,
+                    playhead: liveProgress,
+                    isPlaying: isPlaying,
+                    themeColor: themeColor,
+                    onChanged: _onSeekScrub,
+                  );
                   break;
                 case SliderStyle.material: activeSlider = MaterialThumbSlider(progress: progress, themeColor: themeColor, onChanged: _onSeekScrub); break;
                 case SliderStyle.minimal: activeSlider = MinimalSlider(progress: progress, themeColor: themeColor, onChanged: _onSeekScrub); break;
@@ -1260,7 +1267,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with TickerProviderStat
                           // playback with a frozen clock. Only shown once the stall has persisted (see the
                           // onBuffering listener), placed between the timestamps where the eye already is.
                           // It says which kind: a dropped connection (the user's to fix or wait out) or a
-                          // stall on a working network (ours; waiting is the right response).
+                          // stall on a working network (Auvy's own; waiting is the right response).
                           if (ref.watch(playerProvider
                               .select((p) => p.isStalled)))
                             Text(
@@ -3141,7 +3148,7 @@ class LyricsViewer extends ConsumerStatefulWidget {
 
 class _LyricsViewerState extends ConsumerState<LyricsViewer> {
   // Timed line changes. Position arrives about twice a second, so highlighting only
-  // on samples would be up to half a second late. On each sample we know when the
+  // on samples would be up to half a second late. On each sample it's known when the
   // next line is due, so a single timer is armed for that moment, landing line
   // changes within a few ms. Every sample re-arms it, so a seek, pause or speed
   // change can't leave it firing on a stale prediction.
@@ -3950,8 +3957,8 @@ class _LivePulseDotState extends State<_LivePulseDot>
 /// As a repeating AnimationController each dot asked for a frame on every
 /// vsync for as long as the session or station lasted, ~120 a second, and on
 /// Android every frame redraws the whole player page (blurred lyric lines
-/// included): measured 2026-10-17, 107-115% of a core and ~118 frames a
-/// second on Android as a Listen Together guest, ~121 on an iOS host. A
+/// included): measured at 107-115% of a core and ~118 frames a second on
+/// Android as a Listen Together guest, ~121 on an iOS host. A
 /// dot this small looks the same at 12.5 steps a second. Shared, so two dots
 /// step together, and stopped while the app isn't in the foreground.
 class _PulseClock with WidgetsBindingObserver {

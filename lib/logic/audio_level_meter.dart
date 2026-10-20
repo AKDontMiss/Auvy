@@ -8,7 +8,7 @@ import 'package:auvy/providers/player_provider.dart' show audioIntensityProvider
 
 /// Feeds [audioIntensityProvider], the 0..1 value the player cover's glow
 /// follows ("With the music" and "Bright" in Appearance). Nothing used to set
-/// it, so the glow never moved (seen 2026-10-16).
+/// it, so the glow never moved.
 ///
 /// The native players measure the music as it plays (iOS: the audio tap; Android:
 /// a pass-through processor in the player's audio chain). This reads that level
@@ -25,6 +25,15 @@ class AudioLevelMeter with WidgetsBindingObserver {
 
   int _users = 0;
   Timer? _timer;
+
+  /// Told each raw reading (the RMS the native player measured), for anything
+  /// that wants the music's loudness itself rather than the glow's smoothed
+  /// value: the waveform slider fills in the shape of a song with no file yet
+  /// from these.
+  /// Readings arrive only while someone holds the meter ([acquire]).
+  final List<void Function(double rms)> _readingListeners = [];
+  void addReadingListener(void Function(double rms) listener) => _readingListeners.add(listener);
+  void removeReadingListener(void Function(double rms) listener) => _readingListeners.remove(listener);
   bool _observing = false;
   bool _metering = false;
   bool _polling = false;
@@ -91,6 +100,9 @@ class AudioLevelMeter with WidgetsBindingObserver {
     try {
       final rms = await NativeAudioEngine.getLevel();
       if (_timer == null) return;
+      for (final listener in List.of(_readingListeners)) {
+        listener(rms);
+      }
       _value = settle(smooth(_value, intensityFor(rms, _floor)));
       // Each change the glow is told about is a frame, and on Android a frame
       // renders the whole player page. A step too small to see is skipped.

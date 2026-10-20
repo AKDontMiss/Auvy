@@ -34,8 +34,8 @@ import 'package:auvy/core/utils/container_path_resolver.dart';
 /// (the RECENTLY ADDED run; pinned rows and the built-in folders keep their
 /// own order). Chosen from that run's header.
 ///
-/// Until 2026-10-17 there was only one, the stored order, shown as "recently
-/// added" (owner: "recently added isn't enough"). [dateAdded] sorts newest
+/// There used to be only one, the stored order, shown as "recently added",
+/// which isn't enough. [dateAdded] sorts newest
 /// first; [recentlyPlayed] puts the collections played lately first (from the
 /// record behind the Home mosaic), the rest after them newest first; [name] is
 /// A to Z; [songCount] biggest first; [custom] is the stored order, the one a
@@ -87,7 +87,7 @@ int Function(LibraryItem, LibraryItem) ownRowOrder(SortOption sort,
 /// header and reordered only within itself.
 ///
 /// The page used to put one "RECENTS" header over everything, the pinned
-/// folders and the built-in ones included (fixed 2026-10-16). What each run
+/// folders and the built-in ones included. What each run
 /// really holds:
 ///  * [pinned]: whatever is pinned, the built-in Liked Songs, Followed Artists
 ///    and the like by default.
@@ -388,7 +388,14 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
   // Loads saved library data from local storage on startup.
   Future<void> _init() async {
     final cacheManager = AudioCacheManager();
-    await cacheManager.initialize();
+    try {
+      await cacheManager.initialize();
+    } catch (e) {
+      // The library is saved data and loads without the audio cache; a cache
+      // that failed to start must not leave the library empty (it once did, in
+      // a screenless start for Android Auto).
+      print('ERROR: audio cache did not start ($e) — loading the library anyway');
+    }
     await ContainerPathResolver.ensureInitialized();
     // An account reset can dispose this notifier while a load is in flight, and
     // touching `ref` or `state` after that throws. Checked after each wait.
@@ -745,8 +752,8 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
   /// The URL first because the library is backed up and read by the account's
   /// other phones: a path to THIS phone's file is dead there, so each phone
   /// "healed" the other's path with its own and uploaded the library again, on
-  /// every sync (seen 2026-10-16: the same 1 MB library re-saved and re-uploaded
-  /// after each restore). A URL means the same thing everywhere, and the image
+  /// every sync (the same library re-saved and re-uploaded after each restore).
+  /// A URL means the same thing everywhere, and the image
   /// cache keeps it offline once shown.
   String _replacementImage(String songId) {
     if (songId.isEmpty) return '';
@@ -1415,8 +1422,8 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
               break;
             }
             throttleWaits++;
-            // No header: back off by doubling. Seen in the wild, and the reason
-            // the fallback is not a flat delay.
+            // No header: back off by doubling, rather than a flat delay, since a
+            // throttle without the header does happen.
             final waitSecs =
                 (headerSecs ?? (1 << (throttleWaits - 1))).clamp(1, _kSpotifyMaxThrottleSeconds);
             // Log the Retry-After value too, so "asked for 2 s" can be told from "asked for
@@ -1716,14 +1723,14 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
       actualNewIdx = newAllItems.indexOf(lastItemOfSegment) + 1;
     } else {
       // Flutter's ReorderableListView newIndex is the index before the item that will be at newIndex.
-      // If we are moving forward (down the list), the index shifts because we removed the item earlier.
+      // Moving forward (down the list) shifts the index, because the item was removed earlier.
       int targetInSegment = newIndex;
       if (oldIndex < newIndex) targetInSegment--;
       
       final targetItem = segment[targetInSegment];
       actualNewIdx = newAllItems.indexOf(targetItem);
       
-      // If we moved the item forward, we want it to land AFTER the target item
+      // An item moved forward should land AFTER the target item
       if (oldIndex < newIndex) actualNewIdx++;
     }
 
@@ -2095,7 +2102,7 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
   bool _accountResetting = false;
 
   /// A fingerprint of the last written blob, so an identical save is skipped.
-  /// Cleared whenever the stored copy changes behind us (a cloud restore, an account
+  /// Cleared whenever the stored copy changes behind this notifier (a cloud restore, an account
   /// reset), or the next needed save would be skipped.
   String? _lastSavedSig;
 
@@ -2242,12 +2249,12 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
   /// Re-read the persisted library from SharedPreferences. Called after a cloud
   /// restore overwrites the local blob so in-memory state matches.
   /// Also ENDS an account-reset window — the reload is what makes the in-memory
-  /// library ours to write again. Clearing the flag anywhere else would reopen
+  /// library this notifier's to write again. Clearing the flag anywhere else would reopen
   /// the gap this guard exists to close.
   Future<void> reloadFromStorage() {
     _accountResetting = false;
     // The stored blob was just replaced by someone else (a cloud restore, a
-    // wipe). Any fingerprint we hold describes a copy that is gone, so the next
+    // wipe). Any fingerprint held describes a copy that is gone, so the next
     // save must write rather than compare.
     _lastSavedSig = null;
     _lastEncodedState = null;
@@ -2551,8 +2558,8 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
   void _checkFreshPlaylists() {
     if (!mounted || !_loaded || !NativeAudioEngine.platformAvailable) return;
     // Every app switch is a resume, but a check only has work when a day or a
-    // week rolls over, so they're spaced out (seen on device: one every few
-    // seconds while switching apps).
+    // week rolls over, so they're spaced out (otherwise one every few seconds
+    // while switching apps).
     final now = DateTime.now();
     final last = _lastFreshCheck;
     if (last != null && now.difference(last) < const Duration(minutes: 15)) return;
@@ -2680,7 +2687,7 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
   // Allows user to update the cover art for a custom playlist
   void updatePlaylistImage(String playlistTitle, String newImagePath) {
     final newAllItems = state.allItems.map((item) {
-      // Ensure we never accidentally modify a system folder like "Liked Songs"
+      // Never accidentally modify a system folder like "Liked Songs"
       if (item.title == playlistTitle && !item.isSystemFolder) {
         return LibraryItem(
           title: item.title, 

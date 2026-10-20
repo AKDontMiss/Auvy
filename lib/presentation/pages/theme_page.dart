@@ -969,12 +969,12 @@ class _PlayerControlsColorBlock extends ConsumerWidget {
       (color: Color(0xFFFF1744), name: 'Ruby Flame', tag: 'Ruby'),
       (color: Color(0xFFFF6D00), name: 'Amber Orange', tag: 'Orange'),
       (color: Color(0xFFFFD600), name: 'Solar Gold', tag: 'Gold'),
-      (color: Color(0xFFAEEA00), name: 'Acid Lime', tag: 'Lime'),
       (color: Color(0xFF00C853), name: 'Botanical Emerald', tag: 'Emerald'),
       (color: Color(0xFF00E5FF), name: 'Electric Cyan', tag: 'Cyan'),
       (color: Color(0xFF2979FF), name: 'Cobalt Royal', tag: 'Royal'),
       (color: Color(0xFF7C4DFF), name: 'Amethyst Violet', tag: 'Violet'),
       (color: Color(0xFFFF007F), name: 'Hot Magenta', tag: 'Magenta'),
+      (color: Color(0xFFB0BEC5), name: 'Arctic Silver', tag: 'Silver'),
       (color: Color(0xFF000000), name: 'Pitch Black', tag: 'Black'),
     ];
 

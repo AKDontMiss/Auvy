@@ -522,7 +522,7 @@ class _MainLayoutState extends ConsumerState<MainLayout>
 
     // Matched by name, not only when the context says "playlist": skipping
     // within a list keeps "Liked Songs" as where it plays from (locationName)
-    // but drops the context type (seen on device, 2026-10-15). An album or
+    // but drops the context type. An album or
     // artist context goes to the album below.
     if (state.contextType != 'album' && state.contextType != 'artist') {
       final lib = ref.read(libraryProvider);
@@ -704,7 +704,7 @@ class _MainLayoutState extends ConsumerState<MainLayout>
           : _alarmPool().where((s) => s.id == ringingId).firstOrNull;
     }
 
-    // A hardware key can stop the alarm underneath us (volume rocker — see
+    // A hardware key can stop the alarm underneath the app (volume rocker — see
     // MainActivity.dispatchKeyEvent). Without this the audio stopped and the
     // ringing screen stayed on a silent phone.
     final nav = Navigator.of(context, rootNavigator: true);

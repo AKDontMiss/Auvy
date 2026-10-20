@@ -75,7 +75,7 @@ class AuvySearchField extends StatefulWidget {
 
 class _AuvySearchFieldState extends State<AuvySearchField> {
   /// Only created when the caller doesn't supply one, and only then disposed,
-  /// since disposing a node we were handed would break the owner.
+  /// since disposing a node that was handed in would break its owner.
   FocusNode? _internalNode;
 
   FocusNode get _node => widget.focusNode ?? (_internalNode ??= FocusNode());

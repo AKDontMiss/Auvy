@@ -45,15 +45,6 @@ import 'package:auvy/providers/density_provider.dart';
 import 'package:auvy/presentation/widgets/link_import_sheet.dart';
 
 
-String _getColorSuffix(Color themeColor) {
-  if (themeColor.value == Colors.purpleAccent.value) return "purple";
-  if (themeColor.value == Colors.greenAccent.value) return "green";
-  if (themeColor.value == Colors.orangeAccent.value) return "orange";
-  if (themeColor.value == Colors.redAccent.value) return "red";
-  if (themeColor.value == Colors.pinkAccent.value) return "pink";
-  return "cyan";
-}
-
 String _getThemedIcon(String originalPath, String title, String suffix) {
   if (!originalPath.startsWith('assets/')) return originalPath;
 
@@ -609,7 +600,7 @@ class _LibraryPageState extends ConsumerState<LibraryPage> {
     final libState = ref.watch(libraryProvider);
     final notifier = ref.read(libraryProvider.notifier);
     final themeColor = ref.watch(themeProvider);
-    final suffix = _getColorSuffix(themeColor); 
+    final suffix = themedArtSuffix(themeColor); 
     final double keyboardHeight = MediaQuery.of(context).viewInsets.bottom;
     final bool isKeyboardOpen = keyboardHeight > 0;
     final double bottomGap = isKeyboardOpen ? 20.0 : 150.0;
@@ -1513,7 +1504,7 @@ class _SwipeableLibraryTile extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final themeColor = ref.watch(themeProvider);
-    final iconSuffix = _getColorSuffix(themeColor);
+    final iconSuffix = themedArtSuffix(themeColor);
     final themedIconPath = _getThemedIcon(item.image, item.title, iconSuffix);
 
     return Material(

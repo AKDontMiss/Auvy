@@ -11,7 +11,7 @@ class LruCache<K, V> {
   final int maxEntries;
   final Duration? defaultTtl;
 
-  // LinkedHashMap preserves insertion order, which we use as the LRU order.
+  // LinkedHashMap preserves insertion order, which serves as the LRU order.
   final LinkedHashMap<K, _Entry<V>> _store = LinkedHashMap<K, _Entry<V>>();
 
   V? get(K key) {

@@ -32,9 +32,6 @@ final class AuvyPlayer: NSObject {
     /// ticking) until the new file is ready; position ticks name this one, so
     /// Dart can tell the previous song's ticks apart.
     private var itemVideoId: String = ""
-    /// The item armed by `setUpcoming`, and the id it represents.
-    private var upcomingItem: AVPlayerItem?
-    private var upcomingVideoId: String = ""
 
     /// The next track, fetched to disk shortly before the current one ends so the
     /// change starts from a local file. Otherwise each change resolves and downloads
@@ -50,6 +47,9 @@ final class AuvyPlayer: NSObject {
     private var prefetchWaiters: [(URL?) -> Void] = []
     /// Tracks fetched ahead, by video id. Small: only the next one matters.
     private var prefetchedFiles: [String: URL] = [:]
+    /// The track Dart named as next (setUpcoming). A fetch ahead that finishes
+    /// after Dart named another is kept, but not announced (onFetched).
+    private var nextVideoId = ""
 
 
     private var metadataOutput: (AVPlayerItem, AVPlayerItemMetadataOutput)?
@@ -60,7 +60,7 @@ final class AuvyPlayer: NSObject {
     private var durationObservation: NSKeyValueObservation?
     private var volumeObservation: NSKeyValueObservation?
 
-    /// Last reported values, so we only speak when something actually changed.
+    /// Last reported values, so Dart hears only what actually changed.
     private var lastIsPlaying = false
     private var lastBuffering = false
     /// The user's play/pause INTENT, which survives an error — unlike `isPlaying`,
@@ -70,14 +70,14 @@ final class AuvyPlayer: NSObject {
     /// A track is being fetched and its item isn't in the player yet: the player
     /// still holds the PREVIOUS song. A seek or play asked for now is meant for
     /// the new track, so the seek is held here and applied once the new item is
-    /// ready, and a play only records the intent. Seen on the phone (2026-10-16):
-    /// a song handed over at 25 s started at 0:00, because the seek went to the
-    /// old song, and Dart's play restarted the old song for a second meanwhile.
+    /// ready, and a play only records the intent. Otherwise a song handed over at
+    /// 25 s started at 0:00, because the seek went to the old song, and Dart's
+    /// play restarted the old song for a second meanwhile.
     private var awaitingItem = false
     private var heldStartMs: Int64 = 0
     private var startSeekObservation: NSKeyValueObservation?
     /// Stalls since Dart last asked, read-and-cleared: the question is "has
-    /// anything gone wrong since I last decided?", so a running total would keep
+    /// anything gone wrong since the last decision?", so a running total would keep
     /// re-triggering the same downgrade.
     private var stallCount = 0
     /// When the last seek was asked for, so its re-buffer is not a "stall".
@@ -146,7 +146,7 @@ final class AuvyPlayer: NSObject {
             // AVPlayer reports a stall as "waiting to play at the specified rate",
             // which is the same signal ExoPlayer calls BUFFERING. The raw edge goes
             // to Dart; how long a stall must last to be worth mentioning is the
-            // listener's decision, not ours.
+            // listener's decision, not the player's.
             let buffering = p.timeControlStatus == .waitingToPlayAtSpecifiedRate
             if buffering != self.lastBuffering {
                 self.lastBuffering = buffering
@@ -212,6 +212,41 @@ final class AuvyPlayer: NSObject {
 
         case "getLevel":
             result(Double(player.timeControlStatus == .playing ? AuvyAudioTap.shared.level : 0))
+
+        case "waveform":
+            // A song's real waveform (AuvyWaveform), named by its video id so Dart can
+            // drop an answer that arrives after the song changed: the playing file's,
+            // or, for another song, the file fetched ahead for it (Dart asks when it
+            // hears onFetched).
+            let buckets = (args["buckets"] as? Int) ?? 400
+            let wanted = args["videoId"] as? String ?? ""
+            let videoId: String
+            let url: URL
+            if wanted.isEmpty || wanted == itemVideoId,
+               let playing = (player.currentItem?.asset as? AVURLAsset)?.url {
+                videoId = itemVideoId
+                url = playing
+            } else if !wanted.isEmpty, let file = prefetchedFiles[wanted],
+                      FileManager.default.fileExists(atPath: file.path) {
+                videoId = wanted
+                url = file
+            } else {
+                // Asked for a song whose file isn't in yet (the previous song stays in
+                // the player until it is): answer at once rather than decode a file
+                // nobody wants.
+                result(nil); return
+            }
+            // Skipping through songs starts requests; only the newest is decoded.
+            AuvyWaveform.requests.increment()
+            let request = AuvyWaveform.requests.value
+            DispatchQueue.global(qos: .utility).async {
+                let peaks = AuvyWaveform.decode(url: url, buckets: buckets) {
+                    AuvyWaveform.requests.value != request
+                }
+                DispatchQueue.main.async {
+                    result(peaks.map { ["videoId": videoId, "peaks": $0] as [String: Any] })
+                }
+            }
 
         case "resume":
             resume(); result(nil)
@@ -282,10 +317,9 @@ final class AuvyPlayer: NSObject {
             clearUpcoming(); result(nil)
 
         case "prewarmNext":
-            // Dart warms the next track this way when the gapless setting is off.
-            // iOS has no play-cache to pull a first megabyte into and never queues
-            // the item anyway, so both paths do the same thing: fetch the next file
-            // ahead (see setUpcoming).
+            // Dart names the next track this way when the gapless setting is off.
+            // iOS never queues the item anyway, so both paths do the same thing:
+            // fetch the next file ahead (see setUpcoming).
             setUpcoming(args)
             result(nil)
 
@@ -314,7 +348,7 @@ final class AuvyPlayer: NSObject {
             }
 
         case "promoteFromPlayCache":
-            // "Save from stream", as on Android: copy a track we already fetched instead
+            // "Save from stream", as on Android: copy a track already fetched instead
             // of downloading it again. Every played track sits complete (and repaired) in
             // tmp/auvy-tracks.
             let args = call.arguments as? [String: Any] ?? [:]
@@ -366,7 +400,7 @@ final class AuvyPlayer: NSObject {
             // iOS cannot enumerate AVAILABLE outputs — only the route in use, and
             // an app may not switch to a named device; the system route picker owns
             // that. Returning nothing made the sheet say it could not read the
-            // device's outputs, which is wrong: we know exactly what audio is
+            // device's outputs, which is wrong: it is known exactly what audio is
             // coming out of. So report the ACTIVE route, marked as the current
             // selection, and let the sheet's system-picker link do the choosing.
             let outputs = AVAudioSession.sharedInstance().currentRoute.outputs
@@ -446,6 +480,8 @@ final class AuvyPlayer: NSObject {
             // the UI keeps spinning.
             send("onBuffering", ["buffering": false])
             start(AVPlayerItem(url: fileURL), autoPlay: autoPlay)
+            // Its whole file is here, as for a fetched song (Dart reads its waveform then).
+            send("onFetched", ["videoId": videoId])
             return
         }
         guard let src = source(from: args) else {
@@ -479,6 +515,7 @@ final class AuvyPlayer: NSObject {
             AuvyPlayer.log("playVideo \(videoId): fetched ahead, starting from disk")
             send("onBuffering", ["buffering": false])
             start(AVPlayerItem(url: file), autoPlay: autoPlay)
+            send("onFetched", ["videoId": videoId])
             return
         }
         // From here the item arrives later: until then the player still holds the
@@ -492,6 +529,7 @@ final class AuvyPlayer: NSObject {
                 if let url = url {
                     self.send("onBuffering", ["buffering": false])
                     self.start(AVPlayerItem(url: url), autoPlay: self.playWhenReady)
+                    self.send("onFetched", ["videoId": videoId])
                 } else {
                     self.fetchThenPlay(videoId: videoId, source: source,
                                        generation: generation, autoPlay: autoPlay)
@@ -534,6 +572,7 @@ final class AuvyPlayer: NSObject {
                         return
                     }
                     self.start(AVPlayerItem(url: fileURL), autoPlay: self.playWhenReady)
+                    self.send("onFetched", ["videoId": videoId])
                 }
             }
         }
@@ -723,6 +762,7 @@ final class AuvyPlayer: NSObject {
         guard !videoId.isEmpty else { return }
         // A downloaded track is already a file, and without a URL there is nothing to
         // fetch; either way the change goes the ordinary way.
+        nextVideoId = videoId
         let local = args["localPath"] as? String ?? ""
         guard local.isEmpty, let src = source(from: args) else {
             upcomingSource = nil
@@ -757,6 +797,9 @@ final class AuvyPlayer: NSObject {
                 AuvyPlayer.log(url != nil
                     ? "prefetch: \(videoId) on disk before its turn"
                     : "prefetch: \(videoId) failed — it is fetched when it plays")
+                if url != nil, self.nextVideoId == videoId {
+                    self.send("onFetched", ["videoId": videoId])
+                }
                 if self.prefetchingVideoId == videoId { self.prefetchingVideoId = "" }
                 let waiters = self.prefetchWaiters
                 self.prefetchWaiters = []
@@ -774,20 +817,10 @@ final class AuvyPlayer: NSObject {
         return false
     }
 
-    /// Drop the armed item on skip/prev/reorder/remove, so the player cannot roll
-    /// into a track that is no longer next.
+    /// Forget the next track on skip/prev/reorder/remove. Nothing is queued in the
+    /// player (see setUpcoming), so only the pending fetch ahead is dropped.
     private func clearUpcoming() {
-        // NEVER remove the item that is now playing.
-        //
-        // If the queue already advanced into the armed item, `upcomingItem` IS the
-        // current item, and removing it would tear out the track under the
-        // listener — silence, mid-song, from a call that only meant "forget what
-        // comes next".
-        if let item = upcomingItem, item !== player.currentItem {
-            player.remove(item)
-        }
-        upcomingItem = nil
-        upcomingVideoId = ""
+        nextVideoId = ""
         // A fetch already running finishes into the cache; only the pending one is
         // forgotten.
         upcomingSource = nil
@@ -1041,10 +1074,6 @@ extension AuvyPlayer: AuvyStreamResolving {
                    assetURL.standardizedFileURL == url.standardizedFileURL {
                     return true
                 }
-            }
-            if let assetURL = (self.upcomingItem?.asset as? AVURLAsset)?.url,
-               assetURL.standardizedFileURL == url.standardizedFileURL {
-                return true
             }
             return false
         }

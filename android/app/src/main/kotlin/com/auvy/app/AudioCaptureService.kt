@@ -50,7 +50,7 @@ class AudioCaptureService : Service() {
         /// replaces the "Identifying…" line instead of appearing beside it.
         const val RESULT_NOTIF_ID = NOTIF_ID
 
-        /// How long the headless engine gets before we give up on it. Generous
+        /// How long the headless engine gets before it is given up on. Generous
         /// enough for a cold Dart boot plus a network lookup on mobile data, short
         /// enough that a wedged run does not pin the process.
         private const val HEADLESS_TIMEOUT_MS = 25_000L

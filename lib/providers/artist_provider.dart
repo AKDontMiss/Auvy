@@ -71,7 +71,7 @@ final artistProvider = FutureProvider.family<ArtistData?, ArtistPageKey>((ref, a
       fallbackImage: '',
     );
   } catch (e) {
-    // Fetch failed (offline / flaky network): serve anything we have, however
+    // Fetch failed (offline / flaky network): serve anything already held, however
     // old, before surfacing the error page.
     final stale = await cacheService.getCachedArtistData(idToUse, allowStale: true);
     if (stale != null) {

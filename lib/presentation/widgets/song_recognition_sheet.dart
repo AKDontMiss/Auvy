@@ -190,7 +190,7 @@ class _SongRecognitionSheetState extends ConsumerState<_SongRecognitionSheet>
     setState(() => _outcome = outcome);
   }
 
-  /// True when app-audio capture was blocked and we switched to the mic, so the
+  /// True when app-audio capture was blocked and the mic was used instead, so the
   /// sheet can say so.
   bool _viaMicFallback = false;
 

@@ -257,7 +257,7 @@ class PlayerColorNotifier extends StateNotifier<Color> {
       String resolvedUrl = trimmed;
       // 1. YouTube maxresdefault fix: maxresdefault returns 404 for non-HD videos.
       // hqdefault (480x360) is guaranteed to exist on YouTube, never 404s,
-      // and downscales cleanly to our 80x80 palette target.
+      // and downscales cleanly to the 80x80 palette target.
       if (resolvedUrl.contains('ytimg.com')) {
         resolvedUrl = resolvedUrl.replaceAll(
           RegExp(r'/(?:maxresdefault|sddefault|mqdefault|default)\.jpg'),

@@ -85,7 +85,7 @@ class _HomePageState extends ConsumerState<HomePage> with TickerProviderStateMix
   void initState() {
     super.initState();
     // Update checks NEVER auto-popup. If the user left "Update reminders" on
-    // (Settings), we silently check and show a dismissible banner — not a
+    // (Settings), the app silently checks and shows a dismissible banner — not a
     // blocking dialog. Otherwise nothing happens until they check manually.
     Future.delayed(const Duration(seconds: 3), () async {
       if (!mounted) return;

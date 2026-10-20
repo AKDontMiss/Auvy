@@ -138,8 +138,8 @@ bool shouldAdoptHandoff(
 /// the queue is walked by each song's length (for the current song, the sending
 /// player's own figure when the label is missing). A song whose length is still
 /// unknown stops the walk without guessing a position in it: where it was if it
-/// is the current song, its start otherwise (seen on device: a song with no
-/// label was taken 552 s into a 207 s track). The end of what travelled is the
+/// is the current song, its start otherwise (guessing put a song with no label
+/// minutes past the end of a shorter track). The end of what travelled is the
 /// other limit: the other device went on into autoplay this one can't see, so
 /// its last known song is the closest guess.
 ({int index, int positionMs}) handoffTarget(PlaybackHandoff h, int nowMs) {

@@ -330,7 +330,7 @@ class AlarmAudioService : Service() {
 
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
-        // Take the notification with us. stopSelf() ends the service, but its
+        // Take the notification down too. stopSelf() ends the service, but its
         // foreground notification can outlive it by a beat, which is the other
         // half of the "Auvy is still showing in the panel" residue. Belt and
         // braces: detach it, then cancel it by id in case the detach was a no-op.

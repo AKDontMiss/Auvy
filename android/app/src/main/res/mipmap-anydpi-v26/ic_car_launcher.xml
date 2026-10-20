@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android Auto's launcher icon (the media service's android:icon in the
+     manifest). The car draws the whole visible part of an adaptive icon in its
+     tile, where the phone's glyph (59 of 72 dp) ran into the edges; here it is
+     drawn at 80% (47 dp), the proportion of the iPhone icon. -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background" />
+    <foreground android:drawable="@drawable/ic_car_launcher_foreground" />
+</adaptive-icon>

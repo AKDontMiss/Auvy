@@ -41,6 +41,9 @@ class PlayerMenuSheet extends ConsumerWidget {
   Future<void> _startSongRadio(
       BuildContext context, WidgetRef ref, Color themeColor) async {
     HapticService.medium();
+    // Taken before the menu closes: its ref goes with it, and reading through it
+    // after the await below threw, so the radio never started.
+    final player = ref.read(playerProvider.notifier);
     Navigator.pop(context);
     AnimatedToast.show(context,
         text: 'Building song radio…',
@@ -60,7 +63,7 @@ class PlayerMenuSheet extends ConsumerWidget {
       song,
       ...radio.where((s) => s.id != song.id),
     ];
-    ref.read(playerProvider.notifier).playSong(
+    player.playSong(
           song,
           newQueue: queue,
           source: 'Song radio',
@@ -80,12 +83,15 @@ class PlayerMenuSheet extends ConsumerWidget {
   Future<void> _refetch(
       BuildContext context, WidgetRef ref, Color themeColor) async {
     HapticService.medium();
+    // The app's providers, not this menu's ref, which closes with the menu
+    // before the refetch's awaits are done.
+    final providers = ProviderScope.containerOf(context, listen: false);
     Navigator.pop(context);
     AnimatedToast.show(context,
         text: 'Refetching track details…',
         icon: Icons.refresh_rounded,
         color: themeColor);
-    final outcome = await TrackRefetchService.refetch(ref, song);
+    final outcome = await TrackRefetchService.refetch(providers, song);
     AnimatedToast.message(outcome.message);
   }
 

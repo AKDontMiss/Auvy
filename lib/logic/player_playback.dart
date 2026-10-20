@@ -129,6 +129,7 @@ extension PlayerPlaybackController on PlayerNotifier {
     // the jump. The native clock still emits a couple of pre-seek positions, which
     // would make the slider snap back; onPosition (player_system.dart) drops them
     // while _pendingSeekTarget is set.
+    _seekRequests++;
     _pendingSeekTarget = target;
     _pendingSeekAt = DateTime.now();
     currentPositionProvider.value = target;
@@ -354,7 +355,7 @@ extension PlayerPlaybackController on PlayerNotifier {
       // Stop swap loops. Two recordings of one song can each match the other (A→B→A),
       // and with both answers cached the loop spins without any network and freezes
       // the app. Refusing an id already visited in this chain stops at the first
-      // repeat; the track we hold is a fine answer, since the same lookup nominated
+      // repeat; the track already held is a fine answer, since the same lookup nominated
       // it.
       final chain = {...?conformChain, inputSong.id};
       if (audio != null && chain.contains(audio.id)) {
@@ -606,6 +607,7 @@ extension PlayerPlaybackController on PlayerNotifier {
       miniPlayerVisible: true,
       queue: activeQueue,
       history: updatedHistory,
+      historyCursor: _navIndex,
       historyPlayedAt: Map<String, int>.from(_historyPlayedAt),
       historyPlayedDevice: Map<String, String>.from(_historyPlayedDevice),
       // Keep the pre-shuffle order while shuffle is on, so turning shuffle off can
@@ -762,7 +764,7 @@ extension PlayerPlaybackController on PlayerNotifier {
             );
           } else {
             // YouTube track: hand the video id to the native player and let it resolve
-            // the stream itself, with its own retry and play cache. This keeps the Dart
+            // and fetch the track itself, with its own retries. This keeps the Dart
             // lookup out of the way of the track change; the native resolveStream callback
             // (player_system) resolves on demand, usually from the warm cache.
             print('Native-resolving stream: ${song.title}');
@@ -1006,17 +1008,17 @@ extension PlayerPlaybackController on PlayerNotifier {
     if (_autoCacheAttempted.contains(song.id)) return;
 
     // Auto-cache: after 10 s of listening, copy the track into the "Cached" folder
-    // if the native play cache already holds all of it. A track skipped within a
-    // few seconds is never cached.
+    // if the native player already holds all of it (the file it fetched to play
+    // it). A track skipped within a few seconds is never cached.
     _cacheTimer = Timer(const Duration(seconds: 10), () async {
       if (!mounted || currentState.currentSong?.id != song.id) return;
       // Skip if it's already cached or downloaded.
       if (_cacheManager.isCached(song.id)) return;
       // Promotion only, with no network: the empty url tells cacheTrack to copy the
-      // bytes the native play cache already has, and to do nothing if it doesn't
-      // have the whole track yet. The end-of-track handler (player_system
-      // onTrackEnded) promotes it once it has streamed end to end. Because it only
-      // copies local bytes, it needs no Wi-Fi or data-saver check.
+      // native player's whole copy, and to do nothing if it has none (a track that
+      // streamed instead). The end-of-track handler (player_system onTrackEnded)
+      // tries again once a stream has played end to end. Because it only copies
+      // local bytes, it needs no Wi-Fi or data-saver check.
       _autoCacheAttempted.add(song.id);
       try {
         await _cacheManager.cacheTrack(song, '', isExplicitDownload: false);
@@ -1044,6 +1046,7 @@ extension PlayerPlaybackController on PlayerNotifier {
     _nativeLoadedSongId = null;
 
     currentState = currentState.copyWith(
+      historyCursor: 0,
       isPlaying: false,
       currentSong: null,
       position: Duration.zero,

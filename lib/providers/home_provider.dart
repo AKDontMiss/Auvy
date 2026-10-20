@@ -483,7 +483,7 @@ class HomeNotifier extends StateNotifier<HomeState> {
           // The cache layer already logs the hit (PageCacheService), so this doesn't log
           // it again.
           
-          // We must generate the intelligence lists before returning
+          // The intelligence lists must be generated before returning
           final intel = ref.read(intelligenceProvider);
           final history = ref.read(playerProvider).history;
           
@@ -1052,7 +1052,7 @@ class HomeNotifier extends StateNotifier<HomeState> {
     return;
   }
 
-  //  Trigger Fatigue: Record that we are showing this topic now
+  //  Trigger Fatigue: record that this topic is being shown now
   ref.read(intelligenceProvider.notifier).markTopicSeen(query);
   
     try {

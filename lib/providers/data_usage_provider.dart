@@ -71,8 +71,9 @@ class DataUsageNotifier extends StateNotifier<DataUsageStats> {
   }
 
   
-  /// Adds the audio the native player downloaded, which Dart never sees (ExoPlayer
-  /// on Android, AuvyStreamLoader's URLSession on iOS). Without it the largest
+  /// Adds the audio the native player downloaded, which Dart never sees
+  /// (TrackFetcher and ExoPlayer on Android, AuvyStreamLoader's URLSession on
+  /// iOS). Without it the largest
   /// category would be missing from the screen.
   ///
   /// Each call drains only what's new, so it can be called as often as needed.

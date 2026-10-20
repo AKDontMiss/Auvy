@@ -259,7 +259,7 @@ class LibraryExportService {
             if (interesting(entity.path)) found[entity.path] = entity;
           } else if (entity is Directory && recurse) {
             final name = entity.path.split('/').last;
-            // Android/ is other apps' sandboxes: not ours to read, and slow.
+            // Android/ is other apps' sandboxes: not Auvy's to read, and slow.
             if (name == 'Android' || name.startsWith('.')) continue;
             await scan(entity, recurse: false);
           }

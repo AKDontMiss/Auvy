@@ -10,6 +10,7 @@ import 'package:auvy/services/artist_metadata_service.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:auvy/core/native_audio_engine.dart';
+import 'package:auvy/logic/track_waveform.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:audio_service/audio_service.dart';
 import 'package:auvy/logic/download_helper.dart';
@@ -102,6 +103,12 @@ class PlayerState {
   final List<Song> queue, originalQueue, history;
   final Map<String, int> historyPlayedAt;
   final Map<String, String> historyPlayedDevice;
+
+  /// How far Previous has stepped back through [history]; 0 when it hasn't.
+  /// While above 0, history[historyCursor] is playing, and the tracks stepped
+  /// back over (history[historyCursor - 1] down to history[0]) play next,
+  /// before [queue] goes on. See [upNext].
+  final int historyCursor;
   final int currentIndex;
   final List<Song> userQueue;        // Explicitly added by user
   final List<Song> contextQueue;     // From current playback context
@@ -164,6 +171,17 @@ class PlayerState {
   bool get isLoopActive =>
       loopStart != null && loopEnd != null && loopEnd! > loopStart!;
 
+  /// The tracks Previous stepped back over, in the order they play next (see
+  /// [historyCursor]); empty when it hasn't stepped back.
+  List<Song> get historyAhead => historyCursor > 0 && historyCursor < history.length
+      ? history.sublist(0, historyCursor).reversed.toList()
+      : const [];
+
+  /// What plays after the current track, in order: the tracks Previous stepped
+  /// back over, then the queue. Everything that shows "up next" reads this, so
+  /// it matches what playNext does.
+  List<Song> get upNext => [...historyAhead, ...queue.skip(1)];
+
   int get pitchSemitones =>
       pitch <= 0 ? 0 : (12.0 * (log(pitch) / ln2)).round();
 
@@ -186,6 +204,7 @@ class PlayerState {
     this.history = const [], 
     this.historyPlayedAt = const {},
     this.historyPlayedDevice = const {},
+    this.historyCursor = 0,
     this.isShuffle = false, 
     this.repeatMode = RepeatMode.off,
     this.volume = 1.0,
@@ -233,6 +252,7 @@ class PlayerState {
     List<Song>? history,
     Map<String, int>? historyPlayedAt,
     Map<String, String>? historyPlayedDevice,
+    int? historyCursor,
     bool? isShuffle, RepeatMode? repeatMode, double? volume, double? swipeProgress,
     double? speed, double? podcastSpeed, String? playbackSource,
     String? contextId, String? contextType, String? contextTitle,
@@ -272,6 +292,7 @@ class PlayerState {
       history: history ?? this.history, 
       historyPlayedAt: historyPlayedAt ?? this.historyPlayedAt,
       historyPlayedDevice: historyPlayedDevice ?? this.historyPlayedDevice,
+      historyCursor: historyCursor ?? this.historyCursor,
       isShuffle: isShuffle ?? this.isShuffle, 
       repeatMode: repeatMode ?? this.repeatMode,
       swipeProgress: swipeProgress ?? this.swipeProgress,
@@ -362,6 +383,10 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
   void Function(Map<String, dynamic>)? _receiveHandoffHook;
   bool _playInterrupted = false;
 
+  /// Bumped when an interruption begins, so a resume waiting out the end of an
+  /// earlier one (see _initAudioSession) knows it has been overtaken.
+  int _interruptionGeneration = 0;
+
   /// When Auvy paused ITSELF because the output device went away (Bluetooth
   /// headset disconnected / headphones unplugged), or null if the current pause
   /// has some other cause — the user pressed pause, a call came in, etc.
@@ -408,7 +433,8 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
   String? _preloadedSongId;
 
   // Settle window for pre-warming. Warming the next track costs a stream lookup
-  // and ~1 MB, so a newly changed "next" track must stay next briefly first; the
+  // (the native player fetches its audio only in the current track's last 25
+  // seconds), so a newly changed "next" track must stay next briefly first; the
   // position tick calls the preloader about twice a second, so no timer is needed.
   String? _nextSettleId;
   DateTime? _nextSettleAt;
@@ -456,6 +482,11 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
   // ticks until the clock lands near it (or a failsafe passes).
   Duration? _pendingSeekTarget;
   DateTime? _pendingSeekAt;
+
+  /// Counts seeks asked for through [seek] (the slider, the skip buttons, a
+  /// restart from Previous), so [_settleAt] can tell one happened even after it
+  /// has already landed and the hold above is gone.
+  int _seekRequests = 0;
 
   /// The native player's last position report, as it came (before the seek
   /// hold), and when. [_settleAt] checks a seek against it.
@@ -665,7 +696,7 @@ class PlayerNotifier extends StateNotifier<PlayerState> {
         taste: taste,
         intelNotifier: intelNotifier,
       );
-      // Mode toggled off (or queue replaced) while we were fetching → discard.
+      // Mode toggled off (or queue replaced) during the fetch → discard.
       if (!ref.read(smartShuffleModeProvider) || !state.isShuffle) return;
 
       String sig(Song s) => '${s.title.toLowerCase()}_${s.artist.toLowerCase()}';

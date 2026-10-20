@@ -5,10 +5,12 @@ import 'package:flutter/widgets.dart'
     show WidgetsBinding, AppLifecycleState;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:audio_service/audio_service.dart';
+import 'package:rxdart/rxdart.dart' show BehaviorSubject, ValueStream;
 import 'package:auvy/providers/player_provider.dart';
 import 'package:auvy/core/native_audio_engine.dart';
 import 'package:auvy/providers/library_provider.dart';
 import 'package:auvy/providers/theme_provider.dart';
+import 'package:auvy/core/app_colors.dart' show themedArtSuffix;
 import 'package:auvy/data/dummy_data.dart' show Song;
 import 'package:auvy/services/widget_service.dart';
 import 'package:auvy/presentation/widgets/auvy_image.dart';
@@ -22,6 +24,7 @@ import 'package:auvy/logic/library_integrity.dart'
     show kSystemLibraryTitles, kWeeklyDiscoveryTitle, isFreshReserveKey;
 import 'package:auvy/logic/track_identity.dart';
 import 'package:auvy/services/search_service.dart';
+import 'package:auvy/logic/audio_cache_manager.dart';
 import 'package:auvy/logic/media_kind.dart';
 
 /// Handles every playback control from outside the app: notification and lock
@@ -44,6 +47,20 @@ class AuvyAudioHandler extends BaseAudioHandler with QueueHandler {
   // When the last media-button click was accepted, to debounce repeated clicks
   // (see [click]).
   DateTime? _lastMediaClickAt;
+
+  // Android Auto's "this list changed" (see [subscribeToChildren]), the pending
+  // debounce, and the history length it last saw.
+  final BehaviorSubject<Map<String, dynamic>> _browseChanged =
+      BehaviorSubject.seeded(const {});
+  Timer? _browseRefresh;
+  int _historyLength = -1;
+
+  /// The last car search's results, for playing one with the rest queued.
+  List<Song> _lastSearch = const [];
+
+  // When a click was last turned away because another app was playing. The
+  // accessory repeats it every couple of seconds, so it is logged once a while.
+  DateTime? _otherAppClickLoggedAt;
 
   // Signature of the last broadcast. broadcastState() runs on every player state
   // change, so identical broadcasts are skipped to avoid needless platform calls.
@@ -94,6 +111,35 @@ class AuvyAudioHandler extends BaseAudioHandler with QueueHandler {
   /// list (one tap instead of scrolling a long list while driving).
   static const String _shufflePrefix = 'shuffle';
 
+  /// The car's tabs: Android Auto shows up to four top-level folders as tabs.
+  /// Home, Playlists ([_folderPlaylists]), Library and Recent ([_folderRecent]).
+  static const String _tabHome = 'home';
+  static const String _tabLibrary = 'tab-library';
+
+  /// Home's tiles: 'mix/<collection>' plays a collection in order and
+  /// 'mix/<collection>/shuffle' shuffled. The collections are the widgets' and
+  /// Siri's (see [_playCollection]), so the car starts them the same way.
+  static const String _mixPrefix = 'mix';
+
+  /// A row of the last car search, 'search/<index>' (see [search]).
+  static const String _searchPrefix = 'search';
+
+  // How Android Auto lays out a folder's children, set on the folder: its
+  // browsable children (_kBrowsableStyle) or its playable ones (_kPlayableStyle),
+  // as a list (1) or a grid (2). Items sharing a group title are shown under it.
+  static const String _kBrowsableStyle = 'android.media.browse.CONTENT_STYLE_BROWSABLE_HINT';
+  static const String _kPlayableStyle = 'android.media.browse.CONTENT_STYLE_PLAYABLE_HINT';
+  static const String _kGroupTitle = 'android.media.browse.CONTENT_STYLE_GROUP_TITLE_HINT';
+  static const int _kList = 1;
+  static const int _kGrid = 2;
+
+  /// Shows the car's "downloaded" mark on a song (2 = downloaded).
+  static const String _kDownloadStatus = 'android.media.extra.DOWNLOAD_STATUS';
+
+  /// The address CarArtProvider serves the library's collection tiles from (the
+  /// car can't open the app's own images; see [_tile]).
+  static const String _kTileAuthority = 'content://com.auvy.app.carart';
+
   /// Mirrors isPlaying so the listener below reacts only to play/pause changes,
   /// not to every state write.
   bool _wasPlaying = false;
@@ -112,8 +158,17 @@ class AuvyAudioHandler extends BaseAudioHandler with QueueHandler {
   DateTime? _externalPauseAt;
 
   AuvyAudioHandler(this._playerNotifier) {
+    // Tell Android Auto when what it shows has changed: the library (likes,
+    // playlists, downloads) and, below, Recently Played.
+    try {
+      _playerNotifier.ref.listen(libraryProvider, (_, __) => _scheduleBrowseRefresh());
+    } catch (_) {}
     // Push player state changes to the lock screen and notification.
     _playerNotifier.addListener((state) {
+       if (state.history.length != _historyLength) {
+         _historyLength = state.history.length;
+         _scheduleBrowseRefresh();
+       }
        // Record real listening activity on both play and pause; pausing then pressing
        // play on headphones is the case the resume window exists for.
        if (state.isPlaying != _wasPlaying) {
@@ -165,10 +220,12 @@ class AuvyAudioHandler extends BaseAudioHandler with QueueHandler {
         libraryProvider.select((l) => l.playlistSongs.keys.join('\n')),
         (_, __) => _publishPlaylists(),
       );
-      // A new accent repaints the widgets' play button straight away.
+      // A new accent repaints the widgets' play button straight away, and the
+      // car's tiles (they are drawn in it).
       _playerNotifier.ref.listen(themeProvider, (_, __) {
         _lastBroadcastSig = null;
         broadcastState();
+        _scheduleBrowseRefresh();
       });
     } catch (_) {
       // No live library to follow (a test container); the startup list stands.
@@ -317,15 +374,10 @@ class AuvyAudioHandler extends BaseAudioHandler with QueueHandler {
         return _playList('Recently played', _songsForFolder(_folderRecent),
             shuffle: shuffle, source: source, contextKey: 'Recently played');
       case 'library':
-        // Everything saved, once each, always shuffled: in order it would just be
-        // Liked Songs followed by the first playlist.
-        final seen = <String>{};
-        final all = <Song>[
-          for (final s in _songsForFolder(_folderLiked)) if (seen.add(s.id)) s,
-          for (final name in _playlistNames())
-            for (final s in _songsForFolder(name)) if (seen.add(s.id)) s,
-        ];
-        return _playList('your library', all, shuffle: true, source: source, contextKey: 'Library');
+        // Always shuffled: in order it would just be Liked Songs followed by the
+        // first playlist.
+        return _playList('your library', _librarySongs(),
+            shuffle: true, source: source, contextKey: 'Library');
     }
     return "Auvy doesn't have that list";
   }
@@ -418,9 +470,19 @@ class AuvyAudioHandler extends BaseAudioHandler with QueueHandler {
 
   // --- Background control overrides ---
 
-  /// The play/pause media button. The default toggles on every click, and some
-  /// Bluetooth accessories re-send the click every ~2 s, which made playback flip
-  /// back and forth. Only the first click in a one-second window counts.
+  /// The play/pause media button. The default toggles on every click.
+  ///
+  /// On Android, audio_service turns an accessory's PAUSE and PLAY keys into
+  /// this same click (it can't tell them from a toggle), so a PAUSE could start
+  /// Auvy. With another app playing a video over Bluetooth, a headset can send
+  /// PAUSE every second or two to the session that last played (Auvy), and each
+  /// one flipped Auvy between playing and paused. So:
+  ///  • a click that would START Auvy while another app is audible is ignored
+  ///    (Bluetooth routes keys to the last media session, not to what's playing,
+  ///    and starting over another app is never what that press meant);
+  ///  • and only the first click in a one-second window counts.
+  /// Notification and lock-screen buttons don't come through here (they call
+  /// [play] and [pause] directly), so they still work over another app.
   @override
   Future<void> click([MediaButton button = MediaButton.media]) async {
     if (button == MediaButton.media) {
@@ -430,6 +492,17 @@ class AuvyAudioHandler extends BaseAudioHandler with QueueHandler {
       if (last != null && now.difference(last) < const Duration(milliseconds: 1000)) {
         print('media controls: repeated ${button.name} click within 1 s ignored');
         return; // swallow the spurious repeated click
+      }
+      if (!_playerNotifier.currentState.isPlaying &&
+          await NativeAudioEngine.otherAppIsPlaying()) {
+        final logged = _otherAppClickLoggedAt;
+        if (logged == null || now.difference(logged) > const Duration(seconds: 30)) {
+          _otherAppClickLoggedAt = now;
+          print('STOP: Ignoring a headset play/pause click while another app is '
+              'playing (it would start Auvy over it; further ones are not logged '
+              'for 30 s)');
+        }
+        return;
       }
     }
     print('media controls: ${button.name} button click (headset or accessory)');
@@ -464,6 +537,11 @@ class AuvyAudioHandler extends BaseAudioHandler with QueueHandler {
     if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
       return false;
     }
+
+    // Android Auto is connected: the car's screen is where the user is, and its
+    // play button is as deliberate as the app's. Without this, the car's play
+    // button was refused when the app had been idle a long while.
+    if (await NativeAudioEngine.androidAutoConnected()) return false;
 
     // This process has been playing: trust the press.
     //
@@ -729,66 +807,239 @@ class AuvyAudioHandler extends BaseAudioHandler with QueueHandler {
       return item == null ? const [] : [item];
     }
 
-    MediaItem folder(String id, String title) => MediaItem(
-          id: id,
-          title: title,
-          playable: false,
-          // Shown as a browsable folder rather than a track.
-          extras: const {'android.media.browse.CONTENT_STYLE_BROWSABLE_HINT': 2},
-        );
-
     if (parentMediaId == AudioService.browsableRootId) {
       return [
-        folder(_folderLiked, 'Liked Songs'),
-        folder(_folderPlaylists, 'Playlists'),
-        folder(_folderTop50, 'My Top 50'),
-        folder(_folderDownloads, 'Downloads'),
-        folder(_folderCached, 'Cached'),
-        folder(_folderRecent, 'Recently Played'),
+        _folderItem(_tabHome, 'Home',
+            art: _tabIcon('home'), childStyle: const {_kPlayableStyle: _kGrid}),
+        _folderItem(_folderPlaylists, 'Playlists',
+            art: _tabIcon('playlists'), childStyle: const {_kBrowsableStyle: _kGrid}),
+        _folderItem(_tabLibrary, 'Library',
+            art: _tabIcon('library'), childStyle: const {_kBrowsableStyle: _kGrid}),
+        _folderItem(_folderRecent, 'Recent',
+            art: _tabIcon('recent'), childStyle: const {_kPlayableStyle: _kList}),
       ];
     }
 
-    // The Playlists folder: the user's playlists, addressed by index.
+    if (parentMediaId == _tabHome) return _homeTiles();
+
+    // Library: the same tiles as the app's library, in the user's accent.
+    if (parentMediaId == _tabLibrary) {
+      return [
+        for (final (id, title) in const [
+          (_folderLiked, 'Liked Songs'),
+          (_folderDownloads, 'Downloads'),
+          (_folderCached, 'Cached'),
+        ])
+          _folderItem(id, title, songs: _songsForFolder(id), art: _folderArt(id, const [])),
+      ];
+    }
+
+    // The Playlists tab: the user's playlists, addressed by index, each with a
+    // cover (a grid item without one is drawn as a warning triangle).
     if (parentMediaId == _folderPlaylists) {
       final names = _playlistNames();
-      if (names.isEmpty) return const [];
       return [
         for (var i = 0; i < names.length; i++)
-          MediaItem(
-            id: '$_playlistPrefix/$i',
-            title: names[i],
-            // Track count, to tell playlists apart at a glance.
-            artist: '${_songsForFolder('$_playlistPrefix/$i').length} songs',
-            playable: false,
-            extras: const {
-              'android.media.browse.CONTENT_STYLE_BROWSABLE_HINT': 2
-            },
-          ),
+          _folderItem('$_playlistPrefix/$i', names[i],
+              songs: _songsForFolder('$_playlistPrefix/$i'), art: _playlistArt(names[i])),
       ];
     }
 
     final songs = _songsForFolder(parentMediaId);
     if (songs.isEmpty) return const [];
     return [
-      // One tap to shuffle the whole folder (see [_shufflePrefix]).
+      // One tap to shuffle the whole folder (see [_shufflePrefix]), under the
+      // folder's own picture.
       MediaItem(
         id: '$_shufflePrefix/$parentMediaId',
         title: 'Shuffle all',
         artist: '${songs.length} songs',
+        artUri: _folderArt(parentMediaId, songs),
         playable: true,
       ),
-      for (var i = 0; i < songs.length; i++)
-        MediaItem(
-          id: 'song/$parentMediaId/$i',
-          title: songs[i].title,
-          artist: songs[i].artist,
-          album: songs[i].albumTitle,
-          artUri: songs[i].image.startsWith('http')
-              ? Uri.tryParse(songs[i].image)
-              : null,
-          playable: true,
-        ),
+      for (var i = 0; i < songs.length; i++) _songItem('song/$parentMediaId/$i', songs[i]),
     ];
+  }
+
+  /// A browsable car folder. [songs] gives it a count; [art] is its picture (a
+  /// tab's icon, a tile or a cover); [childStyle] sets how its children are laid
+  /// out.
+  MediaItem _folderItem(String id, String title,
+          {List<Song>? songs, required Uri art, Map<String, dynamic>? childStyle}) =>
+      MediaItem(
+        id: id,
+        title: title,
+        artist: songs == null ? null : '${songs.length} songs',
+        artUri: art,
+        playable: false,
+        extras: childStyle,
+      );
+
+  /// A tab's icon: the app's own (ic_car_tab_*), white; the car tints it.
+  static Uri _tabIcon(String name) =>
+      Uri.parse('android.resource://com.auvy.app/drawable/ic_car_tab_$name');
+
+  /// The library's own tile for a collection (the shattered heart, the 50, …) in
+  /// the user's accent: [name] is the image's name without its colour
+  /// (liked_songs, top_50, weekly_discovery, download, cached or playlist).
+  Uri _tile(String name) {
+    var colour = 'cyan';
+    try {
+      colour = themedArtSuffix(_playerNotifier.ref.read(themeProvider));
+    } catch (_) {
+      // No live theme (a test container): the default accent's tiles.
+    }
+    return Uri.parse('$_kTileAuthority/${name}_$colour');
+  }
+
+  /// A folder's picture, as the library draws it: its tile for the built-in
+  /// ones, the playlist's own picture, or the latest song's cover for Recent.
+  Uri _folderArt(String folderId, List<Song> songs) {
+    switch (folderId) {
+      case _folderLiked:
+        return _tile('liked_songs');
+      case _folderTop50:
+        return _tile('top_50');
+      case _folderDownloads:
+        return _tile('download');
+      case _folderCached:
+        return _tile('cached');
+    }
+    if (folderId.startsWith('$_playlistPrefix/')) {
+      final names = _playlistNames();
+      final i = int.tryParse(folderId.substring(_playlistPrefix.length + 1)) ?? -1;
+      if (i >= 0 && i < names.length) return _playlistArt(names[i]);
+    }
+    return _coverFor(songs);
+  }
+
+  /// A playlist's picture, as the library shows it: its own when that is a web
+  /// address the car can load (an imported list's first cover, say), otherwise
+  /// the themed playlist tile.
+  Uri _playlistArt(String name) {
+    try {
+      final items = _playerNotifier.ref.read(libraryProvider).allItems;
+      for (final item in items) {
+        if (item.title == name && item.image.startsWith('http')) {
+          final uri = Uri.tryParse(item.image);
+          if (uri != null) return uri;
+        }
+      }
+    } catch (_) {
+      // No live library (a test container): the tile below.
+    }
+    return _tile('playlist');
+  }
+
+  /// A song row: its cover when the car can load it (a web address; downloaded
+  /// art lives in the app's own files), and the downloaded mark when it plays
+  /// without signal.
+  MediaItem _songItem(String id, Song song) {
+    final offline = AudioCacheManager().isExplicitlyDownloaded(song.id) ||
+        AudioCacheManager().isCached(song.id);
+    return MediaItem(
+      id: id,
+      title: song.title,
+      artist: song.artist,
+      album: song.albumTitle,
+      artUri: song.image.startsWith('http') ? Uri.tryParse(song.image) : null,
+      playable: true,
+      extras: offline ? const {_kDownloadStatus: 2} : null,
+    );
+  }
+
+  /// The first web cover in [songs], or the themed playlist tile.
+  Uri _coverFor(List<Song> songs) {
+    for (final song in songs.take(20)) {
+      if (song.image.startsWith('http')) {
+        final uri = Uri.tryParse(song.image);
+        if (uri != null) return uri;
+      }
+    }
+    return _tile('playlist');
+  }
+
+  /// Home: a grid of one-tap starts, the lists people play in the car, each
+  /// under the library's own tile for it (Recently Played shows what was last
+  /// on). Empty ones are left out rather than shown as tiles that do nothing.
+  List<MediaItem> _homeTiles() {
+    final out = <MediaItem>[];
+    void tile(String collection, String title, List<Song> songs,
+        {required Uri art, bool shuffle = false}) {
+      if (songs.isEmpty) return;
+      out.add(MediaItem(
+        id: '$_mixPrefix/$collection${shuffle ? '/shuffle' : ''}',
+        title: title,
+        artist: '${songs.length} songs',
+        artUri: art,
+        playable: true,
+        extras: const {_kGroupTitle: 'Play now'},
+      ));
+    }
+
+    tile('liked', 'Shuffle Liked Songs', _songsForFolder(_folderLiked),
+        art: _tile('liked_songs'), shuffle: true);
+    tile('weekly', kWeeklyDiscoveryTitle, _songsForFolder(kWeeklyDiscoveryTitle),
+        art: _tile('weekly_discovery'));
+    tile('top50', 'My Top 50', _songsForFolder(_folderTop50), art: _tile('top_50'));
+    final recent = _songsForFolder(_folderRecent);
+    tile('recent', 'Recently Played', recent, art: _coverFor(recent));
+    // Downloads play with no signal, which is often the point in a car.
+    tile('downloads', 'Shuffle Downloads', _songsForFolder(_folderDownloads),
+        art: _tile('download'), shuffle: true);
+    tile('library', 'Shuffle My Library', _librarySongs(),
+        art: _tile('playlist'), shuffle: true);
+    return out;
+  }
+
+  /// Everything saved, once each: Liked Songs, then every playlist.
+  List<Song> _librarySongs() {
+    final seen = <String>{};
+    return <Song>[
+      for (final s in _songsForFolder(_folderLiked)) if (seen.add(s.id)) s,
+      for (final name in _playlistNames())
+        for (final s in _songsForFolder(name)) if (seen.add(s.id)) s,
+    ];
+  }
+
+  /// Fires Android Auto's "this list changed" for every list it has open, so a
+  /// list opened before the library loaded (or before a like) doesn't stay
+  /// stale. Debounced: the library changes in bursts.
+  void _scheduleBrowseRefresh() {
+    _browseRefresh?.cancel();
+    _browseRefresh = Timer(const Duration(seconds: 2), () => _browseChanged.add(const {}));
+  }
+
+  @override
+  ValueStream<Map<String, dynamic>> subscribeToChildren(String parentMediaId) =>
+      _browseChanged;
+
+  /// The car's search box: the library first (it plays with no signal, and it's
+  /// usually what's asked for), then the catalogue. Matching is the voice
+  /// search's ([_voiceScore]).
+  @override
+  Future<List<MediaItem>> search(String query, [Map<String, dynamic>? extras]) async {
+    final q = normalizedTrackTitle(query);
+    if (q.isEmpty) return const [];
+    final seen = <String>{};
+    final scored = <(double, Song)>[];
+    for (final song in _searchCandidates()) {
+      if (!seen.add(song.id)) continue;
+      final score = _voiceScore(q, song);
+      if (score >= 0.5) scored.add((score, song));
+    }
+    scored.sort((a, b) => b.$1.compareTo(a.$1));
+    final found = [for (final e in scored.take(10)) e.$2];
+    try {
+      for (final song in await SearchService().search(query, 'song')) {
+        if (found.length >= 25) break;
+        if (seen.add(song.id)) found.add(song);
+      }
+    } catch (_) {
+      // No signal: the library's matches are still shown.
+    }
+    _lastSearch = found;
+    return [for (var i = 0; i < found.length; i++) _songItem('$_searchPrefix/$i', found[i])];
   }
 
   /// The user's playlists in a stable order (sorted by name), matching how the
@@ -830,8 +1081,7 @@ class AuvyAudioHandler extends BaseAudioHandler with QueueHandler {
           return lib.playlistSongs['My Top 50'] ?? const [];
         // The library's folder is 'Downloads'; 'Downloaded' is only this
         // folder's id in the browse tree. Looked up under the id, the car's
-        // Downloads and "play my downloads" were always empty (fixed
-        // 2026-10-17).
+        // Downloads and "play my downloads" were always empty.
         case _folderDownloads:
           return lib.playlistSongs['Downloads'] ?? const [];
         case _folderCached:
@@ -924,6 +1174,27 @@ class AuvyAudioHandler extends BaseAudioHandler with QueueHandler {
       return;
     }
 
+    // 'mix/<collection>[/shuffle]': a Home tile.
+    if (mediaId.startsWith('$_mixPrefix/')) {
+      final parts = mediaId.split('/');
+      if (parts.length < 2) return;
+      await _playCollection(parts[1],
+          shuffle: parts.length > 2 && parts[2] == 'shuffle', source: 'Android Auto');
+      return;
+    }
+
+    // 'search/<index>': a row of the last car search, with the rest as the queue.
+    if (mediaId.startsWith('$_searchPrefix/')) {
+      final index = int.tryParse(mediaId.substring(_searchPrefix.length + 1)) ?? -1;
+      final results = _lastSearch;
+      if (index < 0 || index >= results.length) return;
+      _cancelIdleKillTimer();
+      _stopped = false;
+      await _playerNotifier.playSong(results[index],
+          newQueue: results, index: index, source: 'Android Auto search');
+      return;
+    }
+
     // 'shuffle/<folderId>': play the folder in random order.
     if (mediaId.startsWith('$_shufflePrefix/')) {
       final folderId = mediaId.substring(_shufflePrefix.length + 1);
@@ -953,6 +1224,22 @@ class AuvyAudioHandler extends BaseAudioHandler with QueueHandler {
       index: index,
       source: 'Android Auto',
     );
+  }
+
+  /// What the library offers a search: liked songs, history, every playlist
+  /// (duplicates included; callers skip repeats).
+  List<Song> _searchCandidates() {
+    final candidates = <Song>[];
+    try {
+      final lib = _playerNotifier.ref.read(libraryProvider);
+      candidates
+        ..addAll(lib.likedSongs)
+        ..addAll(_playerNotifier.currentState.history);
+      for (final list in lib.playlistSongs.values) {
+        candidates.addAll(list);
+      }
+    } catch (_) {}
+    return candidates;
   }
 
   /// Android's voice search ("play … on Auvy"), from whichever assistant or car
@@ -994,16 +1281,7 @@ class AuvyAudioHandler extends BaseAudioHandler with QueueHandler {
     final q = normalizedTrackTitle(query);
     if (q.isEmpty) return null;
 
-    final candidates = <Song>[];
-    try {
-      final lib = _playerNotifier.ref.read(libraryProvider);
-      candidates
-        ..addAll(lib.likedSongs)
-        ..addAll(_playerNotifier.currentState.history);
-      for (final list in lib.playlistSongs.values) {
-        candidates.addAll(list);
-      }
-    } catch (_) {}
+    final candidates = _searchCandidates();
 
     Song? best;
     var bestScore = 0.0;
@@ -1159,7 +1437,7 @@ class AuvyAudioHandler extends BaseAudioHandler with QueueHandler {
       positionMs: state.position.inMilliseconds,
       durationMs: state.duration.inMilliseconds,
       upNext: [
-        for (final s in state.queue.skip(1).take(3))
+        for (final s in state.upNext.take(3))
           s.displayArtist.isEmpty ? s.title : '${s.title} — ${s.displayArtist}',
       ],
     );
@@ -1208,10 +1486,13 @@ class AuvyAudioHandler extends BaseAudioHandler with QueueHandler {
               MediaControl.skipToPrevious,
               isPlaying ? MediaControl.pause : MediaControl.play,
               MediaControl.skipToNext,
-              MediaControl(
+              // A custom action, not setRating: Android Auto shows only custom
+              // actions beside the transport buttons, so as a rating it never
+              // appeared in the car. The notification shows either kind.
+              MediaControl.custom(
                 androidIcon: isLiked ? 'drawable/ic_liked' : 'drawable/ic_notliked',
                 label: isLiked ? 'Unlike' : 'Like',
-                action: MediaAction.setRating,
+                name: 'toggleLike',
               ),
             ],
       systemActions: isRadio

@@ -13,10 +13,9 @@ import 'package:shared_preferences_platform_interface/types.dart';
 /// taste data and its listening history there, and past 4 MB iOS logs
 /// "Attempting to store >= 4194304 bytes of data in CFPreferences/NSUserDefaults
 /// on this platform is invalid" and puts the store in "direct mode", where the
-/// app writes the whole file itself, later. Seen on device (2026-10-15): a cloud
-/// restore's settings (the accent colour, the onboarding flag) were never
-/// written before the app was closed, and the next launch showed onboarding in
-/// the default colours.
+/// app writes the whole file itself, later. A cloud restore's settings (the
+/// accent colour, the onboarding flag) could then be lost if the app closed
+/// first, and the next launch showed onboarding in the default colours.
 ///
 /// This store sits between SharedPreferences and the platform store. Strings
 /// and string lists above [largeThreshold] go to their own files in Application

@@ -10,8 +10,8 @@ import kotlin.math.sqrt
 
 /**
  * How loud the music is right now, for the player cover's glow ("With the music"
- * and "Bright" in Appearance). The glow read a value nothing ever set, so it
- * never moved (seen 2026-10-16).
+ * and "Bright" in Appearance). The glow used to read a value nothing ever set,
+ * so it never moved.
  *
  * Sits in the player's own audio chain (see NativePlayerManager's renderers
  * factory) and passes every buffer through untouched. The system Visualizer

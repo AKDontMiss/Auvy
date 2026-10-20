@@ -50,12 +50,7 @@ import 'package:auvy/providers/density_provider.dart';
 String getThemedIcon(String originalPath, String title, Color themeColor) {
   if (!originalPath.startsWith('assets/')) return originalPath;
 
-  String suffix = "cyan";
-  if (themeColor.value == Colors.purpleAccent.value) suffix = "purple";
-  else if (themeColor.value == Colors.greenAccent.value) suffix = "green";
-  else if (themeColor.value == Colors.orangeAccent.value) suffix = "orange";
-  else if (themeColor.value == Colors.redAccent.value) suffix = "red";
-  else if (themeColor.value == Colors.pinkAccent.value) suffix = "pink";
+  final suffix = themedArtSuffix(themeColor);
 
   if (title == "Liked Songs") return "assets/images/liked_songs_$suffix.webp";
   if (title == "My Top 50") return "assets/images/top_50_$suffix.webp";
@@ -480,7 +475,7 @@ class _PlaylistPageState extends ConsumerState<PlaylistPage> {
   /// only written by [_commitPendingCover] when the check is pressed, so backing out
   /// of edit mode discards it.
   void _stageCover(String sourcePath) {
-    // Replacing one staged pick with another: the earlier temp file is ours and
+    // Replacing one staged pick with another: the earlier temp file is this page's and
     // nothing points at it any more, so it goes now rather than being left for
     // the OS to reclaim whenever.
     _dropStagedFile();
@@ -744,7 +739,7 @@ class _PlaylistPageState extends ConsumerState<PlaylistPage> {
     AsyncValue<List<Song>>? externalTracksAsync;
 
     if (isLocal) {
-      // Ad-hoc collection: show exactly the tracks we were handed, no fetch.
+      // Ad-hoc collection: show exactly the tracks handed in, no fetch.
       tracks = widget.localTracks!;
     } else if (isExternal) {
       externalTracksAsync = ref.watch(playlistTracksProvider(widget.externalId!));
@@ -2215,8 +2210,12 @@ class _PlaylistPageState extends ConsumerState<PlaylistPage> {
           else notifier.reorderPlaylistTracks(playlistTitle, oldIdx, newIdx);
         },
         itemBuilder: (context, index) {
-          return KeyedSubtree(
+          // A hold anywhere on the row drags it, not only on the handle (which still
+          // drags at once). Edit mode has no hold of its own on a row (the song menu
+          // is off while selecting), and a tap still selects.
+          return ReorderableDelayedDragStartListener(
             key: ValueKey('track_${tracks[index].id}_$index'),
+            index: index,
             child: _buildTrackTile(context, ref, tracks[index], index, playlistTitle, true, isPodcast, queue: tracks),
           );
         },
@@ -2918,8 +2917,8 @@ class _SwipeablePlaylistTile extends ConsumerWidget {
                     return Padding(padding: const EdgeInsets.only(right: 8), child: Icon(dl ? Icons.download_done_outlined : Icons.offline_bolt_outlined, color: Colors.white24, size: 18));
                   },
                 ),
-                // Shown whenever the list is reorderable (edit mode only). Selection and dragging
-                // share edit mode without conflict, since a drag must start on the handle.
+                // Shown whenever the list is reorderable (edit mode only): drags at once. A
+                // hold anywhere on the row drags too (see the list); a tap selects.
                 if (canReorder) ReorderableDragStartListener(index: index, child: const Icon(Icons.drag_handle, color: Colors.white54)),
               ],
             ),

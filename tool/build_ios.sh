@@ -4,7 +4,8 @@
 # the Worker host falls back to an unresolvable sentinel and the sign-in gate can
 # never return a verdict.
 #
-#   ./tool/build_ios.sh [profile|release|debug]   (default: release)
+#   ./tool/build_ios.sh [profile|release|debug] [--flutter-flag…] [NAME=value…]
+#   (default: release; a --flag goes to flutter build, NAME=value is a define)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -27,10 +28,13 @@ else
   echo "WARNING: no .env — the app will build but cannot reach its backend." >&2
 fi
 
-# Extra defines from CLI arguments (e.g. ./tool/build_ios.sh release SOME_FLAG=val)
+# Extra arguments: a --flag (e.g. --no-codesign) goes to flutter build as is;
+# anything else is a define (e.g. ./tool/build_ios.sh release SOME_FLAG=val).
+FLAGS=()
 shift || true
 for extra in "$@"; do
-  [[ -n "$extra" ]] && DEFINES+=("--dart-define=$extra")
+  [[ -z "$extra" ]] && continue
+  if [[ "$extra" == --* ]]; then FLAGS+=("$extra"); else DEFINES+=("--dart-define=$extra"); fi
 done
 
 # Cargokit builds metadata_god's Rust core from source on iOS.
@@ -42,4 +46,6 @@ export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }--remap-path-prefix=$HOME=~"
 # NOT `set -x`: the defines carry the keys, and tracing them would print every
 # value into the terminal and into any log the build output is piped to.
 echo "flutter build ios --$MODE (+${#DEFINES[@]} defines, values not echoed)"
-flutter build ios --"$MODE" "${DEFINES[@]}"
+# The ${X[@]+…} form expands an empty array to nothing under `set -u` on the
+# macOS bash 3.2.
+flutter build ios --"$MODE" ${FLAGS[@]+"${FLAGS[@]}"} ${DEFINES[@]+"${DEFINES[@]}"}

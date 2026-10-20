@@ -88,8 +88,8 @@ Map<String, String> splitLibrary(String? libraryJson) {
 /// them; My Top 50 is worked out on each phone from the synced play counts, and
 /// rebuilt after every restore. Synced, each phone's list replaced the other's
 /// on every restore (taking Downloads' custom order with it) and went back up
-/// changed: seen 2026-10-17, both went up with nearly every push from both
-/// phones. They go up empty, and a restore keeps this phone's own (see
+/// changed, so both went up with nearly every push from every phone. They go
+/// up empty, and a restore keeps this phone's own (see
 /// [keepDeviceOwned]).
 const Set<String> kDeviceOwnedPlaylists = {'Downloads', 'My Top 50'};
 
@@ -103,8 +103,8 @@ const String kCoverOverrideDir = '/artwork_overrides/';
 /// phone. The cover itself syncs as bytes (`auvy_artwork_overrides_v2`), and
 /// each phone points the row back at its own copy after every load
 /// (`_reconcileCustomCovers`), so the path is noise in the backup, and a
-/// different noise on each phone: seen 2026-10-17, 15 such rows made the row
-/// list go up from every device on nearly every push. Only paths into the
+/// different noise on each phone: a handful of such rows made the row list go
+/// up from every device on nearly every push. Only paths into the
 /// cover folder are blanked; any other value is left as it was.
 Object? withoutDevicePaths(Object? allItems) {
   if (allItems is! List) return allItems;
@@ -155,8 +155,8 @@ String keepDeviceOwned(String restored, String? local) {
 /// The library rows whose counts belong to THIS device: what it has cached and
 /// downloaded. Synced as "0 songs" and recounted by each device after a restore,
 /// so one phone's cache growing doesn't upload the row list and make the other
-/// phone take a count that isn't its own (and upload its own back): seen
-/// 2026-10-16, `auvy_lib::allItems` went up with most pushes from every device.
+/// phone take a count that isn't its own (and upload its own back), which sent
+/// `auvy_lib::allItems` up with most pushes from every device.
 const Set<String> kDeviceCountFolders = {'Cached', 'Downloads'};
 
 /// [allItems] with the per-device folders' counts neutralised (see

@@ -20,7 +20,7 @@ enum AuvyMP4Repair {
     /// differently from the other two, which is why the offset is computed per box.
     private static let durationBoxes: Set<String> = ["mvhd", "mdhd", "tkhd"]
 
-    /// A moov larger than this is not something we are willing to read whole.
+    /// A moov larger than this is not read whole.
     /// A fragmented audio moov is a few KB (its sample tables are empty); even a
     /// fully-muxed hour-long file is well under this.
     private static let maxMoovBytes: Int64 = 8 * 1024 * 1024
@@ -132,7 +132,7 @@ enum AuvyMP4Repair {
     private static func forEachDurationField(in moov: [UInt8], from start: Int,
                                              _ visit: (Int, Int) -> Void) {
         // Only descend into the containers that can hold a header box; anything
-        // else is a sample table we have no business parsing.
+        // else is a sample table with no business being parsed.
         let containers: Set<String> = ["moov", "trak", "mdia"]
 
         func walk(_ start: Int, _ end: Int) {

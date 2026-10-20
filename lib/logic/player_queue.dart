@@ -684,8 +684,8 @@ extension PlayerQueueController on PlayerNotifier {
 
     } else {
       if (currentState.repeatMode == RepeatMode.all) {
-        // Last track of a Repeat All loop: restart the whole context if we still have
-        // it, and only replay this single track when there is no context to loop.
+        // Last track of a Repeat All loop: restart the whole context if it is still
+        // known, and only replay this single track when there is no context to loop.
         if (_reseedRepeatAllLoop() && currentState.queue.length > 1) {
           print('Repeat All: restarting the context from the top');
           await playSong(
@@ -733,7 +733,7 @@ extension PlayerQueueController on PlayerNotifier {
           // shortly after, auto-advance instead of staying stopped.
           print('ALERT: Refill found nothing — arming late-arrival rescue');
           // Reset the progress bar to 0 instead of leaving it at the end of the finished
-          // track while we wait.
+          // track during the wait.
           currentPositionProvider.value = Duration.zero;
           final expectedSongId = currentState.currentSong?.id;
           _recoveryTimer?.cancel();
@@ -928,6 +928,7 @@ extension PlayerQueueController on PlayerNotifier {
     _historyPlayedDevice.clear();
     currentState = currentState.copyWith(
       history: [],
+      historyCursor: 0,
       historyPlayedAt: {},
       historyPlayedDevice: {},
     );

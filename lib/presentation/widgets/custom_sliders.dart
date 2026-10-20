@@ -1,5 +1,9 @@
+import 'dart:async';
 import 'dart:math';
 import 'package:flutter/material.dart';
+
+import 'package:auvy/logic/audio_level_meter.dart';
+import 'package:auvy/logic/track_waveform.dart';
 
 import 'package:auvy/presentation/widgets/slider_clock.dart';
 import 'package:auvy/presentation/widgets/visible_clock_hold.dart';
@@ -8,42 +12,151 @@ import 'package:auvy/presentation/widgets/visible_clock_hold.dart';
 // by the player page and the settings preview.
 
 // ==========================================
-// WAVEFORM SLIDER (SoundCloud / Pro Audio Style)
+// WAVEFORM SLIDER (the song's own loudness, as a voice recorder's level trace)
 // ==========================================
+
+/// The playing song's real waveform as the seek bar (see [TrackWaveform]): it
+/// asks for the song's waveform, and while a song is being filled in (a stream,
+/// or a song whose file is still being fetched), holds the level meter and
+/// hands it each reading at the current position.
+class TrackWaveformSlider extends StatefulWidget {
+  final String songId; final double progress; final bool isPlaying;
+  final Color themeColor; final ValueChanged<double> onChanged;
+  /// Where the song really is (0..1). [progress] follows the finger while
+  /// dragging; a reading belongs to what is being heard.
+  final double playhead;
+  const TrackWaveformSlider({super.key, required this.songId, required this.progress,
+      required this.playhead, required this.isPlaying, required this.themeColor, required this.onChanged});
+  @override State<TrackWaveformSlider> createState() => _TrackWaveformSliderState();
+}
+
+class _TrackWaveformSliderState extends State<TrackWaveformSlider> {
+  bool _metering = false;
+
+  @override
+  void initState() {
+    super.initState();
+    TrackWaveform.instance.watch();
+    TrackWaveform.instance.current.addListener(_onWaveform);
+    AudioLevelMeter.instance.addReadingListener(_onReading);
+    unawaited(TrackWaveform.instance.show(widget.songId));
+    _onWaveform();
+  }
+
+  @override
+  void didUpdateWidget(TrackWaveformSlider old) {
+    super.didUpdateWidget(old);
+    if (old.songId != widget.songId) {
+      unawaited(TrackWaveform.instance.show(widget.songId));
+    }
+  }
+
+  @override
+  void dispose() {
+    TrackWaveform.instance.unwatch();
+    TrackWaveform.instance.current.removeListener(_onWaveform);
+    AudioLevelMeter.instance.removeReadingListener(_onReading);
+    _setMetering(false);
+    super.dispose();
+  }
+
+  /// The meter runs only while a song is being filled in.
+  void _onWaveform() => _setMetering(TrackWaveform.instance.wantsReadings);
+
+  void _setMetering(bool on) {
+    if (on == _metering) return;
+    _metering = on;
+    on ? AudioLevelMeter.instance.acquire() : AudioLevelMeter.instance.release();
+  }
+
+  void _onReading(double rms) {
+    if (widget.isPlaying) TrackWaveform.instance.record(widget.songId, widget.playhead, rms);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<WaveformData?>(
+      valueListenable: TrackWaveform.instance.current,
+      builder: (context, data, _) => WaveformSlider(
+        progress: widget.progress,
+        themeColor: widget.themeColor,
+        onChanged: widget.onChanged,
+        levels: data?.songId == widget.songId ? data!.levels : null,
+      ),
+    );
+  }
+}
+
 class WaveformSlider extends StatelessWidget {
   final double progress; final Color themeColor; final ValueChanged<double> onChanged;
-  const WaveformSlider({super.key, required this.progress, required this.themeColor, required this.onChanged});
+  /// One loudness per slice of the song, 0..1, null where not known yet; null
+  /// altogether before anything is known.
+  final List<double?>? levels;
+  const WaveformSlider({super.key, required this.progress, required this.themeColor, required this.onChanged, this.levels});
+
+  /// A made-up shape for the settings preview, which has no song to measure.
+  static final List<double> sample = () {
+    final random = Random(42);
+    final raw = [for (var i = 0; i < 120; i++) (sin(i * 0.3) * 10).abs() + random.nextDouble() * 15 + 4];
+    final loudest = raw.reduce(max);
+    return [for (final v in raw) v / loudest];
+  }();
+
   @override Widget build(BuildContext context) {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onHorizontalDragUpdate: (details) => onChanged((details.localPosition.dx / (context.findRenderObject() as RenderBox).size.width).clamp(0.0, 1.0)),
       onTapDown: (details) => onChanged((details.localPosition.dx / (context.findRenderObject() as RenderBox).size.width).clamp(0.0, 1.0)),
-      child: SizedBox(height: 44, width: double.infinity, child: CustomPaint(painter: _WaveformPainter(progress: progress, themeColor: themeColor))),
+      child: SizedBox(height: 44, width: double.infinity, child: CustomPaint(painter: _WaveformPainter(progress: progress, themeColor: themeColor, levels: levels))),
     );
   }
 }
 class _WaveformPainter extends CustomPainter {
-  final double progress; final Color themeColor;
-  _WaveformPainter({required this.progress, required this.themeColor});
-  @override void paint(Canvas canvas, Size size) {
-    final centerY = size.height / 2, currentX = size.width * progress;
-    final random = Random(42); // Fixed seed ensures the waveform doesn't jitter
-    const barWidth = 3.0, barSpacing = 2.0; double startX = 0.0;
-    
-    while (startX < size.width) {
-      final isActive = startX <= currentX;
-      // Generate realistic looking audio peaks
-      final maxPeak = (sin(startX * 0.05) * 10).abs() + random.nextDouble() * 15 + 4;
-      final paint = Paint()
-        ..color = isActive ? themeColor : Colors.white.withOpacity(0.15)
-        ..strokeWidth = barWidth
-        ..strokeCap = StrokeCap.round;
-      
-      canvas.drawLine(Offset(startX, centerY - maxPeak / 2), Offset(startX, centerY + maxPeak / 2), paint);
-      startX += barWidth + barSpacing;
+  final double progress; final Color themeColor; final List<double?>? levels;
+  _WaveformPainter({required this.progress, required this.themeColor, required this.levels});
+
+  /// The loudest known slice under line [i] of [lines], or null if none is known.
+  double? _levelFor(int i, int lines) {
+    final l = levels;
+    if (l == null || l.isEmpty) return null;
+    final from = (i * l.length / lines).floor();
+    final to = max(from + 1, ((i + 1) * l.length / lines).floor()).clamp(0, l.length);
+    double? best;
+    for (var j = from; j < to; j++) {
+      final v = l[j];
+      if (v != null && (best == null || v > best)) best = v;
     }
+    return best;
   }
-  @override bool shouldRepaint(covariant _WaveformPainter old) => old.progress != progress || old.themeColor != themeColor;
+
+  @override void paint(Canvas canvas, Size size) {
+    final mid = size.height / 2, playX = size.width * progress;
+    // Thin lines packed close, mirrored about the middle, each a moment's
+    // loudness: the look of a voice recorder's level trace. The loudest moment
+    // reaches 62% of the height, and a contrast curve (power 1.6) lets the dips
+    // between loud passages read as dips instead of a solid block.
+    const lineWidth = 1.0, gap = 1.25, period = lineWidth + gap, minH = 1.2;
+    final maxH = size.height * 0.62;
+    final lines = max(1, ((size.width + gap) / period).floor());
+    Paint line(Color c) => Paint()..color = c..strokeWidth = lineWidth..strokeCap = StrokeCap.round;
+    final played = line(themeColor), playedUnknown = line(themeColor.withOpacity(0.45));
+    final ahead = line(Colors.white.withOpacity(0.32)), aheadUnknown = line(Colors.white.withOpacity(0.16));
+    for (var i = 0; i < lines; i++) {
+      final x = i * period + lineWidth / 2;
+      final level = _levelFor(i, lines);
+      // An unknown moment is a dot: no height is drawn that the song doesn't have.
+      final h = level == null ? minH : max(minH, maxH * pow(level, 1.6));
+      final paint = x <= playX ? (level == null ? playedUnknown : played) : (level == null ? aheadUnknown : ahead);
+      canvas.drawLine(Offset(x, mid - h / 2), Offset(x, mid + h / 2), paint);
+    }
+    // The playhead: a short upright line.
+    canvas.drawLine(Offset(playX, mid - maxH / 2 - 4), Offset(playX, mid + maxH / 2 + 4), Paint()
+      ..color = Colors.white.withOpacity(0.9)
+      ..strokeWidth = 1.6
+      ..strokeCap = StrokeCap.round);
+  }
+  @override bool shouldRepaint(covariant _WaveformPainter old) =>
+      old.progress != progress || old.themeColor != themeColor || !identical(old.levels, levels);
 }
 
 // ==========================================

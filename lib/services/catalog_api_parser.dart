@@ -494,7 +494,7 @@ class CatalogApiParser {
         return;
       }
 
-      // Capture the first continuation token we encounter.
+      // Capture the first continuation token encountered.
       if (continuation == null && node.containsKey('continuations')) {
         continuation = _extractContinuation(node['continuations']);
       }

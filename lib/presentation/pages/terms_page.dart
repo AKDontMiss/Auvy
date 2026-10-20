@@ -21,7 +21,7 @@ class TermsPage extends ConsumerWidget {
   ///
   /// Shown rather than a version number: a reader wants to know how old the
   /// statement is, and the app version tells them nothing about that.
-  static const String lastReviewed = '8 September 2026';
+  static const String lastReviewed = '20 October 2026';
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -33,11 +33,7 @@ class TermsPage extends ConsumerWidget {
         child: Text(
           'Plain language, and only things the app actually does. '
           'Last reviewed against the code on $lastReviewed.',
-          style: TextStyle(
-            color: Colors.white.withOpacity(0.6),
-            fontSize: 12.5,
-            height: 1.5,
-          ),
+          style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 12.5, height: 1.5),
         ),
       ),
       children: [
@@ -74,6 +70,7 @@ class TermsPage extends ConsumerWidget {
                 'grants you no rights over that content, and using it does not '
                 'change whatever terms those services set. Complying with them '
                 'is yours to do.',
+            'You must be at least 13 years old to use Auvy.',
             'Access is granted per account and can be withdrawn. A sign-in is '
                 'checked against an approval list, and a specific device can be '
                 'signed out remotely — which is the mechanism that protects a '
@@ -96,10 +93,12 @@ class TermsPage extends ConsumerWidget {
             'There is no analytics, no crash reporter and no advertising or '
                 'tracking library in this app. Nothing reports back on how you '
                 'use it.',
-            'SIGNING IN sends the identity you sign in with, and an identifier '
+            'SIGNING IN sends the identity you sign in with (the account\'s '
+                'email or handle), and an identifier, model and system version '
                 'for this device, to Auvy\'s own service. It stores whether the '
-                'account is approved and which devices are signed in, which is '
-                'what makes remote sign-out possible. A device that has been '
+                'account is approved, when it first and last signed in, and '
+                'which devices are signed in, which is what makes remote '
+                'sign-out possible. A device that has been '
                 'signed out remotely stops the next time it contacts that '
                 'service, not the instant the button is pressed.',
             'STARTING THE APP asks Google Play Integrity to attest that this '
@@ -153,6 +152,17 @@ class TermsPage extends ConsumerWidget {
                 'issues the key can derive it again. If it ever fails to issue '
                 'one, the app falls back to uploading in the clear rather than '
                 'silently skipping the backup.',
+            'YOUR OTHER DEVICES, with cloud backup on: each of your phones '
+                'writes its name, its system and what it is playing (nothing '
+                'during a private session) to Google Firestore, sealed with the '
+                'backup\'s key, so your other phones can show it and take over '
+                'playback.',
+            'LISTEN TOGETHER, while you are in a session: your display name, '
+                'the song playing, its position, play and pause, and the shared '
+                'queue go to Google Firestore, where everyone with the '
+                'session\'s code can read them. This is not encrypted, because '
+                'the others in the session have to read it. The session\'s '
+                'records are deleted when it ends.',
             'SCROBBLING is off until you enter a ListenBrainz token, and '
                 'then sends what you listen to to ListenBrainz. Nothing is '
                 'scrobbled to Last.fm — Auvy has no Last.fm scrobbling at all.',
@@ -184,6 +194,8 @@ class TermsPage extends ConsumerWidget {
                 'tokens are stripped as each line is written, not at export, '
                 'so a redacted line is the only version that ever exists on '
                 'disk.',
+            'Android Auto shows your library on the car\'s screen through the '
+                'phone. Nothing about it goes anywhere else.',
             'Where each of these is controlled: Settings → Privacy pauses and '
                 'clears the listening and search history, and holds the '
                 'private-session switch that suspends both at once. Settings → '
@@ -192,6 +204,27 @@ class TermsPage extends ConsumerWidget {
                 'preferences while keeping the counts they were built from. '
                 'Each of those screens states exactly what it does and does '
                 'not remove.',
+          ],
+        ),
+        _Section(
+          tint: tint,
+          icon: Icons.person_outline_rounded,
+          heading: 'Your data, and who to ask',
+          paragraphs: [
+            'Auvy is run by Akram Ahmed, the author named in About, who also '
+                'approves every account. He is responsible for what Auvy\'s own '
+                'service holds about you: the sign-in record described above.',
+            'Settings → Account → Delete Account deletes your cloud backup and '
+                'everything Auvy keeps on this phone, and signs the account out. The '
+                'sign-in record on Auvy\'s service is erased when you ask for it: '
+                'ask the person who approved your account. The same way, you can '
+                'ask what that record holds and have it corrected.',
+            'How long things are kept: the sign-in record until it is erased; '
+                'the cloud backup until you delete your account; a Listen '
+                'Together session until it ends; everything else on this phone '
+                'until you clear it or remove the app.',
+            'If you think your data has been mishandled, you can also complain '
+                'to the data protection authority where you live.',
           ],
         ),
       ],

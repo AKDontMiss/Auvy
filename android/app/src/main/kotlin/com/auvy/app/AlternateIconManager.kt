@@ -96,7 +96,7 @@ object AlternateIconManager {
         try {
             // COMPONENT_ENABLED_STATE_DEFAULT (not _ENABLED) restores the
             // manifest's own value and clears the explicit override entirely,
-            // which is what we want: MainActivity's manifest state is enabled.
+            // which is the intent: MainActivity's manifest state is enabled.
             pm.setComponentEnabledSetting(
                 ComponentName(context.packageName, TARGET),
                 PackageManager.COMPONENT_ENABLED_STATE_DEFAULT,

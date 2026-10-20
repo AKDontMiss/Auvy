@@ -475,7 +475,7 @@ String _universalLink(Song song, PostcardKind kind) {
       // …but the length test ALONE is not enough. This app mints its own ids
       // in the same character class, and `local_12345` is exactly 11 legal
       // characters, so an imported file could slip through and produce a
-      // song.link that resolves to nothing. Reject our own namespaces
+      // song.link that resolves to nothing. Reject Auvy's own namespaces
       // explicitly.
       if (_isAppLocalId(id)) return '';
       return 'https://song.link/y/$id';

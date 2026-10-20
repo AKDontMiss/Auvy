@@ -914,7 +914,7 @@ final class AuvyDocumentPicker: NSObject, UIDocumentPickerDelegate {
         let target = FileManager.default.temporaryDirectory
             .appendingPathComponent(url.lastPathComponent)
 
-        // The picked file may already be the target (asCopy puts it in our temp
+        // The picked file may already be the target (asCopy puts it in the app's temp
         // directory), in which case the removeItem below would delete it.
         if url.standardizedFileURL == target.standardizedFileURL {
             finish(target)

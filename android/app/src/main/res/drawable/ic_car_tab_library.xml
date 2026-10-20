@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android Auto's Library tab: the app's own Library icon (Material library_music, rounded). The car tints it. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="24" android:viewportHeight="24">
+    <path android:fillColor="#FFFFFFFF" android:pathData="M20.02,2.02L8.02,2.02C6.89,2.02 6,2.91 6,3.98L6,15.98C6,17.11 6.89,18 8.02,18L20.02,18C21.09,18 21.98,17.11 21.98,15.98L21.98,3.98C21.98,2.91 21.09,2.02 20.02,2.02ZM17.02,6.98L15,6.98L15,12.38C15,13.64 14.11,14.81 12.84,14.95C11.16,15.19 9.75,13.73 10.03,12C10.22,10.92 11.2,10.08 12.33,9.98C12.98,9.94 13.55,10.17 14.02,10.5L14.02,6C14.02,5.44 14.44,5.02 15,5.02L17.02,5.02C17.53,5.02 18,5.44 18,6C18,6.56 17.53,6.98 17.02,6.98ZM3,6C2.44,6 2.02,6.47 2.02,6.98L2.02,20.02C2.02,21.09 2.91,21.98 3.98,21.98L17.02,21.98C17.53,21.98 18,21.56 18,21C18,20.44 17.53,20.02 17.02,20.02L5.02,20.02C4.45,20.02 3.98,19.55 3.98,18.98L3.98,6.98C3.98,6.47 3.56,6 3,6Z" />
+</vector>

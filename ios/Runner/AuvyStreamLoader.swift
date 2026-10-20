@@ -55,7 +55,7 @@ protocol AuvyStreamResolving: AnyObject {
 ///  1. **Bounded ranges.** googlevideo refuses large and open-ended ranges, so
 ///     every fetch is a small bounded range.
 ///  2. **Re-resolving mid-fetch.** Stream URLs expire and are bound to the IP
-///     that resolved them, so after a Wi-Fi/mobile switch we ask Dart for a
+///     that resolved them, so after a Wi-Fi/mobile switch Dart is asked for a
 ///     fresh URL (of the same format) and carry on at the same offset.
 ///
 /// Playback uses [downloadToFile]: the whole track is fetched to a file, then
@@ -180,7 +180,7 @@ final class AuvyStreamLoader: NSObject {
 
     /// A ranged GET, run to completion on the calling queue.
     ///
-    /// Blocking is deliberate and matches the design on both sides: this runs on our
+    /// Blocking is deliberate and matches the design on both sides: this runs on the loader's
     /// own concurrent queue, never the main thread, and the player's loader is meant
     /// to block while bytes are on the way.
     private func syncGet(url: URL, range: (Int64, Int64), userAgent: String?)

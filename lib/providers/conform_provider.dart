@@ -230,7 +230,7 @@ Song conformedForDisplay(WidgetRef ref, Song song) {
   }
   Song resolved = entry?.audio ?? song;
 
-  // Don't download a cover we're about to replace: a video row's 16:9 still will
+  // Don't download a cover that is about to be replaced: a video row's 16:9 still will
   // be replaced by the audio cover once the lookup lands. A blank path makes
   // AuvyImage draw its placeholder (no request), which then crossfades into the
   // real cover. Only while the lookup is inside its grace window (see

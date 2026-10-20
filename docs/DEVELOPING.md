@@ -16,7 +16,7 @@ part of it.
 | Part | Language | Lives in | Job |
 | --- | --- | --- | --- |
 | App | Dart (Flutter, Riverpod) | `lib/` | UI, library, search, recommendations, queue logic, backup |
-| Android player | Kotlin (media3/ExoPlayer) | `android/app/src/main/kotlin/` | Playback, streaming in byte ranges, audio focus, song-recognition capture, alarm, widgets, Quick Settings tile, shortcuts, shared links |
+| Android player | Kotlin (media3/ExoPlayer) | `android/app/src/main/kotlin/` | Playback (each song fetched whole in byte ranges, then played from the file, as on iOS), audio focus, song-recognition capture, alarm, widgets, Quick Settings tile, shortcuts, shared links |
 | iOS player | Swift (AVFoundation) | `ios/Runner/` | The same platform channels as Android, plus Siri and Shortcuts (see [ios/README.md](../ios/README.md)) |
 | iOS widgets | Swift (WidgetKit) | `ios/AuvyWidget/`, `ios/Shared/` | Home-screen, lock-screen and Control Center widgets; the data they share with the app |
 | Worker | JavaScript (Cloudflare Workers) | not in this repository | Verifies sign-ins, gates access, holds the API keys, proxies metadata |
@@ -25,8 +25,8 @@ part of it.
 Two design points explain most of the structure:
 
 - **Audio never goes through the Worker.** Dart resolves a stream URL and the
-  native player fetches the bytes itself, in small ranges, re-resolving when a
-  URL expires.
+  native player fetches the bytes itself, in small ranges, to a file it then
+  plays, re-resolving when a URL expires.
 - **The app ships no API keys.** Anything that needs a key goes through the
   Worker, which holds it as a secret.
 
@@ -180,6 +180,13 @@ measure performance.
 - **Comments explain why**, in plain language, for someone reading the code for
   the first time. Keep them short and about the code as it is now; history
   belongs in commit messages.
+- **Comments are neutral and timeless.** They describe the code and the
+  behaviour, not who did what or when: no first person ("we", "I"), no people
+  ("the owner asked"), no particular phone ("the Galaxy did…"), no dates or
+  first-hand stories ("seen on 20 October…"). When a past failure explains a
+  decision, state it as behaviour ("some headphones send PAUSE now and then
+  with nothing playing, and each one started Auvy"). Dated observations belong
+  in tests and commit messages.
 - **One copy of a rule.** When two places need the same decision, they call one
   function, and a test often checks that nobody reintroduces a second copy.
 - **One kit per kind of screen.** The browse hubs (Podcasts, Radio,

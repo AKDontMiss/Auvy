@@ -59,9 +59,9 @@ class CatalogApiClient {
 
   /// Whole-chain refusals in a row, across tracks, with no stream resolved in
   /// between. One means that video is unavailable (taken down, region-locked):
-  /// the chain refused it while other songs played fine either side (seen
-  /// 2026-10-16: four such videos in 23 minutes, each followed a
-  /// second later by another upload playing). Two in a row is the signature of
+  /// the chain refused it while other songs played fine either side (each such
+  /// video followed a second later by another upload playing). Two in a row is
+  /// the signature of
   /// a visitor id that has gone stale, which affects every video.
   static int _chainRefusalsInARow = 0;
 
@@ -84,7 +84,7 @@ class CatalogApiClient {
   static const Duration _probeTimeout   = Duration(seconds: 4);  // stream-URL validation probe
   static const int      _playerRetries  = 2;                     // attempts per stream client
   // Overall wall-clock budget to resolve ONE videoId across ALL stream clients.
-  // Past this we stop trying further clients instead of hanging the UI. (Worst
+  // Past this no further clients are tried, instead of hanging the UI. (Worst
   // case before: 5 clients x 3 retries x 12s ≈ 3 minutes on a flaky network.)
   static const Duration _resolveDeadline = Duration(seconds: 18);
 
@@ -441,8 +441,8 @@ class CatalogApiClient {
     final deadline = DateTime.now().add(_resolveDeadline);
     // clientStartIndex rotates which client is tried FIRST. On a persistent 403
     // (a format/PO-token-gated stream that re-fetching the SAME format can't
-    // cure — e.g. a chunk mid-track keeps 403ing), the caller bumps this so we
-    // resolve a DIFFERENT client/format instead of hammering the gated one.
+    // cure — e.g. a chunk mid-track keeps 403ing), the caller bumps this so a
+    // DIFFERENT client/format is resolved instead of hammering the gated one.
     final order = CatalogApiClients.streamOrder;
     // What each client said, for the decisions after the guest chain.
     final refusals = <String>{};
@@ -498,8 +498,8 @@ class CatalogApiClient {
           continue;
         }
 
-        // Probe the URL with the same Range request ExoPlayer will send, so we
-        // never hand the player a URL that 403s (e.g. an IP/age-gated client).
+        // Probe the URL with the same Range request ExoPlayer will send, so the
+        // player is never handed a URL that 403s (e.g. an IP/age-gated client).
         // Falls through to the next client on failure.
         if (!await _validateStreamUrl(url, client.userAgent,
             contentLength: _audioContentLength(fmt!, url))) {

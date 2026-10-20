@@ -28,9 +28,9 @@ final class AuvyCommands: NSObject, FlutterSceneLifeCycleDelegate {
     private static let pendingLifetime: TimeInterval = 90
 
     /// When Dart said ready, and the last command an intent delivered: iOS can
-    /// deliver ONE widget tap twice around a cold start (seen on the phone,
-    /// 2026-10-16, after the held copy was already dropped on timeout: two
-    /// "togglePlay from widget" 0.67 s apart, so it played and paused at once).
+    /// deliver ONE widget tap twice around a cold start (after the held copy was
+    /// already dropped on timeout, the two arrive under a second apart, so it
+    /// played and paused at once).
     /// The same command again within two seconds, in the first seconds after
     /// start-up, is that repeat.
     private var readyAt: Date?
@@ -204,8 +204,8 @@ final class AuvyCommands: NSObject, FlutterSceneLifeCycleDelegate {
                     done = true
                     // The intent now asks iOS to open Auvy, and iOS runs the intent
                     // AGAIN once it has. The held copy goes, or the command runs
-                    // twice: seen on the phone (2026-10-16), one widget tap on a
-                    // closed app played then paused at once.
+                    // twice: one widget tap on a closed app played, then paused at
+                    // once.
                     self.pending.removeAll { $0.id == entry }
                     continuation.resume(returning: .timedOut)
                 }

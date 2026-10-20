@@ -243,7 +243,7 @@ class GenreBoost {
 class IntelligenceNotifier extends StateNotifier<IntelligenceState> {
   Timer? _saveTimer;
 
-  // Hard cap on how many Song objects we keep in trackMetadata. Without this it
+  // Hard cap on how many Song objects trackMetadata keeps. Without this it
   // grew forever (every track ever interacted with stayed in RAM), so a long
   // session leaked tens of MB. Oldest-inserted entries are pruned first.
   static const int _maxMetadataEntries = 1500;
@@ -892,7 +892,7 @@ class IntelligenceNotifier extends StateNotifier<IntelligenceState> {
   }
 
   /// P(next artist == [toArtist] | last played artist), from the Markov graph.
-  /// 0 when we have no transition data from the last artist.
+  /// 0 when there is no transition data from the last artist.
   double _artistTransitionScore(String rawTo) {
     final toArtist = artistKeyOf(rawTo);
     final from = _lastRecordedArtist;
@@ -1632,7 +1632,7 @@ class IntelligenceNotifier extends StateNotifier<IntelligenceState> {
     });
     counts.forEach((id, n) {
       if (id.isEmpty || n <= 0) return;
-      // Only for tracks we can actually render — a count with no metadata is a
+      // Only for tracks that can actually be rendered — a count with no metadata is a
       // ghost that nothing can show or recommend (see the cap in recordPlay).
       if (!newMeta.containsKey(id)) return;
       if ((newCounts[id] ?? 0) >= n) return;

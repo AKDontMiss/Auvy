@@ -124,7 +124,7 @@ shares them.
 
 ## Bundled third-party libraries
 
-Auvy's 35 direct dependencies are open-source packages under MIT, BSD and
+Auvy's 36 third-party direct dependencies are open-source packages under MIT, BSD and
 Apache-2.0 licences (all permissive, none copyleft). Their notices, and those of
 the packages they depend on, are shown in the app under **About → Open-source
 licences**, generated from package metadata so the list can't go stale.
@@ -133,6 +133,11 @@ One native library is bundled too, in the iPhone build only:
 [libwebp](https://chromium.googlesource.com/webm/libwebp) (Copyright (c) 2010,
 Google Inc., BSD-3-Clause), used to store custom covers as WebP because iOS can
 read WebP but not write it. Its notice is registered on the same licence page.
+
+Some Android icons (the widget, shortcut and Android Auto tab icons in
+`android/app/src/main/res/drawable`) use path data from Google's
+[Material Icons](https://github.com/google/material-design-icons), under the
+Apache License 2.0.
 
 ## Cover artwork
 
